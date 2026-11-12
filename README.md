@@ -2,10 +2,11 @@
 
 Painel web de controle de efetivo da base militar **Exército de Solano** (One State RP).
 
-- **Efetivo:** cadastro com nome no RP, passaporte, Discord, patente, ingresso e observações
+- **Efetivo:** cadastro com nome no RP, Discord (obrigatório), patente, setor, ingresso e observações
+- **Setores:** Sul, Norte, Centro, Leste e Especiais (editáveis), com as funções 1 CMD, 2 CMD, 1 AUX e 2 AUX
 - **Promoções e punições:** histórico completo, com motivo e autor
 - **Bate-ponto:** entrada e saída de serviço, horas acumuladas, ranking semanal
-- **Acessos por cargo:** login com o nome do jogo e senha; limites de cada cargo conferidos pelo banco de dados
+- **Acessos pela patente:** login com o nome do jogo e senha; cada conta é ligada a uma ficha e a patente define o que pode fazer
 - **Tempo real:** o que um oficial altera aparece na tela dos outros na hora
 
 Tecnologia: HTML + JavaScript puro (sem build), hospedado no GitHub Pages, com banco, login e tempo real no [Supabase](https://supabase.com).
@@ -59,8 +60,8 @@ O painel usa o login por e-mail do Supabase por baixo dos panos: o nome do jogo 
 1. Abra o site, clique em **Criar conta**, use o seu nome do jogo e uma senha.
 2. Clique em **Assumir como ADM Geral**. Essa opção aparece só uma vez: depois que existe um ADM, ela some para todos.
    Faça isso logo depois de publicar, antes de divulgar o link.
-3. Peça para os oficiais criarem conta. Eles aparecem na aba **Acessos → Aguardando liberação**.
-   Confirme no jogo que a conta é mesmo da pessoa e defina o nome no RP e o cargo.
+3. Peça para os militares criarem conta. Eles aparecem na aba **Acessos → Aguardando liberação**.
+   Confirme no jogo que a conta é mesmo da pessoa e clique em **Liberar**: crie uma ficha nova ou ligue a uma ficha que já existe.
 
 ### Senhas
 
@@ -70,20 +71,31 @@ O painel usa o login por e-mail do Supabase por baixo dos panos: o nome do jogo 
 
 ---
 
-## Cargos e permissões
+## Acessos e permissões
 
-| Cargo | Padrão |
-|---|---|
-| ADM Geral | Tudo, sem limite de patente, gerencia acessos |
-| Federal | Tudo, concede até GEN ADJ |
-| General Adjunto | Tudo, concede até CEL GEN |
-| Coronel General | Sem revogar punição e sem ajustar ponto, concede até TEN GEN |
-| Tenente General | Sem revogar, exonerar e ajustar ponto, concede até MAJ GEN |
-| Major General | Sem editar, revogar, exonerar e ajustar ponto, concede até CEL |
+Cada conta é ligada a uma ficha do efetivo, e **a patente da ficha define o acesso**:
 
-- Tudo isso é editável pelo ADM Geral na aba **Acessos**.
-- Regra fixa: ninguém promove, pune, edita ou exonera militar de patente igual ou maior que a própria.
-- Quem criou conta mas não tem cargo não vê nenhum dado.
+| Patente da ficha | Acesso | Padrão |
+|---|---|---|
+| — | ADM Geral | Tudo, sem limites; gerencia contas. Não entra na contagem do efetivo |
+| Federal | Federal | Tudo, concede até GEN ADJ |
+| General Adjunto | General Adjunto | Tudo, concede até CEL GEN |
+| Coronel General | Coronel General | Sem revogar punição e ajustar ponto, concede até TEN GEN |
+| Tenente General | Tenente General | Sem revogar, exonerar, ajustar ponto e setores, concede até MAJ GEN |
+| Major General | Major General | Sem editar, revogar, exonerar, ajustar ponto e setores, concede até CEL |
+| Recruta a Coronel | Visualização | Vê o painel, não altera nada |
+
+- Os limites dos generais são editáveis pelo ADM Geral na aba **Acessos**.
+- Promoção, rebaixamento ou exoneração mudam o acesso na hora. Ficha exonerada = acesso suspenso.
+- Regra fixa: ninguém promove, pune, edita, exonera ou move de setor militar de patente igual ou maior que a própria.
+- Conta ainda não liberada não vê nenhum dado.
+
+## Setores e funções
+
+- Aba **Setores**: cada setor mostra as funções 1 CMD, 2 CMD, 1 AUX e 2 AUX e os militares dele.
+- Cada função é única no setor: ao atribuir a outro militar, quem ocupava perde a função e continua no setor.
+- Um militar fica em um setor por vez. Exonerado sai do setor automaticamente.
+- Quem pode mexer: ADM Geral e os cargos com **Gerenciar setores e funções** ligado.
 
 ### Como a segurança funciona
 

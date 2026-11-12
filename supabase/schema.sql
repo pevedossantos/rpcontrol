@@ -3,13 +3,15 @@
 --  Script do banco (Supabase / Postgres)
 --
 --  Como usar: Supabase → SQL Editor → New query → cole TODO este arquivo → Run.
---  Pode rodar de novo sem perder dados (usa "if not exists" / "or replace").
+--  Pode rodar de novo sempre que o arquivo for atualizado: os dados não se perdem.
 --
 --  Modelo de segurança:
---   • Só quem tem cargo (tabela staff) consegue LER os dados.
---   • Ninguém escreve direto nas tabelas. Toda alteração passa por uma
---     função (RPC) que confere o cargo, as permissões e a patente no servidor
---     e grava o histórico junto.
+--   • Cada login (conta) é ligado a uma ficha do efetivo. O nível de acesso vem
+--     da PATENTE da ficha: Major General para cima usa a tabela de limites;
+--     abaixo disso, só visualiza. Ficha exonerada perde o acesso.
+--   • O ADM Geral não tem ficha e não tem limites.
+--   • Ninguém escreve direto nas tabelas: toda alteração passa por uma função
+--     que confere permissão e patente no servidor e grava o histórico.
 -- =====================================================================
 
 create extension if not exists pgcrypto;
@@ -18,14 +20,13 @@ create extension if not exists pgcrypto;
 -- Tabelas
 -- ---------------------------------------------------------------------
 
--- Conta de quem se cadastrou no painel (preenchido automaticamente no cadastro)
+-- Conta criada no painel (preenchida automaticamente no cadastro)
 create table if not exists public.perfis (
   user_id   uuid primary key references auth.users on delete cascade,
   nome_jogo text,
   usuario   text,
   criado_em timestamptz not null default now()
 );
--- Migração da versão com login pelo Discord
 do $$ begin
   if exists (select 1 from information_schema.columns where table_schema='public' and table_name='perfis' and column_name='discord_nome') then
     alter table public.perfis rename column discord_nome to nome_jogo;
@@ -35,13 +36,63 @@ alter table public.perfis add column if not exists usuario text;
 alter table public.perfis drop column if exists avatar_url;
 create unique index if not exists perfis_usuario_uk on public.perfis (usuario);
 
--- Oficiais com acesso ao painel
-create table if not exists public.staff (
-  user_id   uuid primary key references auth.users on delete cascade,
-  cargo     text not null check (cargo in ('adm','federal','genadj','celgen','tengen','majgen')),
-  nome      text not null,
+-- Setores da base
+create table if not exists public.setores (
+  id        uuid primary key default gen_random_uuid(),
+  nome      text not null check (length(nome) between 1 and 40),
+  ordem     int  not null default 0,
   criado_em timestamptz not null default now()
 );
+create unique index if not exists setores_nome_uk on public.setores (lower(trim(nome)));
+insert into public.setores (nome, ordem)
+select n, o from (values ('Sul',1),('Norte',2),('Centro',3),('Leste',4),('Especiais',5)) v(n,o)
+where not exists (select 1 from public.setores);
+
+-- Militares (fichas)
+create table if not exists public.membros (
+  id             uuid primary key default gen_random_uuid(),
+  nome           text not null check (length(nome) between 1 and 60),
+  discord        text not null default '',
+  patente        int  not null default 0 check (patente between 0 and 13),
+  status         text not null default 'ativo' check (status in ('ativo','exonerado')),
+  setor_id       uuid references public.setores on delete set null,
+  funcao         text check (funcao in ('1CMD','2CMD','1AUX','2AUX')),
+  ingresso       date not null default current_date,
+  obs            text not null default '',
+  total_ms       bigint not null default 0,
+  servico_inicio timestamptz,
+  servico_sessao uuid,
+  criado_em      timestamptz not null default now(),
+  criado_por     uuid
+);
+-- Migração: setor e função
+alter table public.membros add column if not exists setor_id uuid references public.setores on delete set null;
+alter table public.membros add column if not exists funcao text check (funcao in ('1CMD','2CMD','1AUX','2AUX'));
+create unique index if not exists membros_funcao_uk on public.membros (setor_id, funcao) where funcao is not null;
+-- Migração: o ID (passaporte) saiu do cadastro; a coluna antiga fica guardada, sem obrigação
+do $$ begin
+  if exists (select 1 from information_schema.columns where table_schema='public' and table_name='membros' and column_name='passaporte') then
+    alter table public.membros alter column passaporte drop not null;
+    alter table public.membros drop constraint if exists membros_passaporte_check;
+  end if;
+end $$;
+drop index if exists public.membros_passaporte_uk;
+-- Discord único (ignorando maiúsculas); se já houver repetidos, o índice fica para depois
+do $$ begin
+  create unique index if not exists membros_discord_uk on public.membros (lower(trim(discord))) where trim(discord) <> '';
+exception when unique_violation then
+  raise notice 'Há Discords repetidos no efetivo. Corrija e rode o script de novo para ativar a verificação.';
+end $$;
+
+-- Contas com acesso ao painel
+create table if not exists public.staff (
+  user_id   uuid primary key references auth.users on delete cascade,
+  cargo     text not null,
+  nome      text not null,
+  membro_id uuid references public.membros on delete set null,
+  criado_em timestamptz not null default now()
+);
+alter table public.staff add column if not exists membro_id uuid references public.membros on delete set null;
 
 -- Limites de cada cargo (editáveis pelo ADM Geral na aba Acessos)
 create table if not exists public.cargo_perms (
@@ -56,7 +107,6 @@ create table if not exists public.cargo_perms (
   ajustar_ponto boolean not null default false,
   max_patente   int     not null default 0 check (max_patente between 0 and 13)
 );
-
 insert into public.cargo_perms
   (cargo,     cadastrar, editar, promover, punir, revogar, exonerar, ponto, ajustar_ponto, max_patente) values
   ('federal', true,  true,  true, true, true,  true,  true, true,  12),
@@ -65,24 +115,12 @@ insert into public.cargo_perms
   ('tengen',  true,  true,  true, true, false, false, true, false,  9),
   ('majgen',  true,  false, true, true, false, false, true, false,  8)
 on conflict (cargo) do nothing;
-
--- Militares
-create table if not exists public.membros (
-  id             uuid primary key default gen_random_uuid(),
-  nome           text not null check (length(nome) between 1 and 60),
-  passaporte     text not null check (length(passaporte) between 1 and 20),
-  discord        text not null default '',
-  patente        int  not null default 0 check (patente between 0 and 13),
-  status         text not null default 'ativo' check (status in ('ativo','exonerado')),
-  ingresso       date not null default current_date,
-  obs            text not null default '',
-  total_ms       bigint not null default 0,
-  servico_inicio timestamptz,
-  servico_sessao uuid,
-  criado_em      timestamptz not null default now(),
-  criado_por     uuid
-);
-create unique index if not exists membros_passaporte_uk on public.membros (lower(trim(passaporte)));
+do $$ begin
+  if not exists (select 1 from information_schema.columns where table_schema='public' and table_name='cargo_perms' and column_name='setores') then
+    alter table public.cargo_perms add column setores boolean not null default false;
+    update public.cargo_perms set setores = true where cargo in ('federal','genadj','celgen');
+  end if;
+end $$;
 
 -- Punições
 create table if not exists public.punicoes (
@@ -129,8 +167,31 @@ create table if not exists public.historico (
 create index if not exists historico_em_idx on public.historico (em desc);
 
 -- ---------------------------------------------------------------------
+-- Migração das contas: o cargo passa a vir da patente da ficha
+-- ---------------------------------------------------------------------
+alter table public.staff drop constraint if exists staff_cargo_check;
+do $$
+declare s record; mid uuid;
+begin
+  for s in select * from public.staff where cargo not in ('adm','membro') loop
+    insert into public.membros (nome, discord, patente)
+    values (s.nome, '', case s.cargo when 'federal' then 13 when 'genadj' then 12 when 'celgen' then 11
+                                     when 'tengen' then 10 when 'majgen' then 9 else 0 end)
+    returning id into mid;
+    update public.staff set cargo = 'membro', membro_id = mid where user_id = s.user_id;
+  end loop;
+end $$;
+alter table public.staff add constraint staff_cargo_check check (cargo in ('adm','membro'));
+
+-- ---------------------------------------------------------------------
 -- Funções auxiliares
 -- ---------------------------------------------------------------------
+
+-- Versões antigas (assinaturas que mudaram)
+drop function if exists public.cadastrar_membro(text, text, text, int, date, text);
+drop function if exists public.editar_membro(uuid, text, text, text, date, text);
+drop function if exists public.definir_staff(uuid, text, text);
+drop function if exists public.remover_staff(uuid);
 
 create or replace function public.patente_sigla(i int) returns text
 language sql immutable as $$
@@ -143,6 +204,11 @@ language sql immutable as $$
                 'Major General','Tenente General','Coronel General','General Adjunto','Federal'])[i+1]
 $$;
 
+create or replace function public.funcao_sigla(f text) returns text
+language sql immutable as $$
+  select case f when '1CMD' then '1 CMD' when '2CMD' then '2 CMD' when '1AUX' then '1 AUX' when '2AUX' then '2 AUX' end
+$$;
+
 create or replace function public.nivel_cargo(c text) returns int
 language sql immutable as $$
   select case c when 'adm' then 99 when 'federal' then 13 when 'genadj' then 12
@@ -153,22 +219,29 @@ create or replace function public.nome_cargo(c text) returns text
 language sql immutable as $$
   select case c when 'adm' then 'ADM Geral' when 'federal' then 'Federal' when 'genadj' then 'General Adjunto'
                 when 'celgen' then 'Coronel General' when 'tengen' then 'Tenente General'
-                when 'majgen' then 'Major General' else 'Sem cargo' end
+                when 'majgen' then 'Major General' when 'leitor' then 'Visualização' else 'Sem acesso' end
 $$;
 
+-- Cargo efetivo de quem está logado: 'adm', um dos cargos de general, 'leitor' ou null (sem acesso)
 create or replace function public.meu_cargo() returns text
 language sql stable security definer set search_path = public as $$
-  select cargo from staff where user_id = auth.uid()
+  select case
+    when s.cargo = 'adm' then 'adm'
+    when m.id is null or m.status <> 'ativo' then null
+    when m.patente >= 9 then (array['majgen','tengen','celgen','genadj','federal'])[m.patente - 8]
+    else 'leitor' end
+  from staff s left join membros m on m.id = s.membro_id
+  where s.user_id = auth.uid()
 $$;
 
 create or replace function public.is_staff() returns boolean
 language sql stable security definer set search_path = public as $$
-  select exists (select 1 from staff where user_id = auth.uid())
+  select meu_cargo() is not null
 $$;
 
 create or replace function public.is_adm() returns boolean
 language sql stable security definer set search_path = public as $$
-  select coalesce((select cargo = 'adm' from staff where user_id = auth.uid()), false)
+  select coalesce(meu_cargo() = 'adm', false)
 $$;
 
 create or replace function public.meu_nivel() returns int
@@ -178,7 +251,11 @@ $$;
 
 create or replace function public.meu_rotulo() returns text
 language sql stable security definer set search_path = public as $$
-  select nome || ' · ' || nome_cargo(cargo) from staff where user_id = auth.uid()
+  select case when s.cargo = 'adm' then s.nome || ' · ADM Geral'
+              when m.id is not null then patente_sigla(m.patente) || ' ' || m.nome
+              else s.nome end
+  from staff s left join membros m on m.id = s.membro_id
+  where s.user_id = auth.uid()
 $$;
 
 create or replace function public.tem_perm(p text) returns boolean
@@ -194,6 +271,7 @@ begin
     when 'promover'  then r.promover   when 'punir'    then r.punir
     when 'revogar'   then r.revogar    when 'exonerar' then r.exonerar
     when 'ponto'     then r.ponto      when 'ajustar_ponto' then r.ajustar_ponto
+    when 'setores'   then r.setores
     else false end;
 end $$;
 
@@ -249,6 +327,34 @@ begin
   return trim(p);
 end $$;
 
+create or replace function public._validar_nome(p text) returns text
+language plpgsql immutable as $$
+begin
+  if p is null or length(trim(p)) = 0 then raise exception 'Informe o nome no RP.'; end if;
+  if length(trim(p)) > 60 then raise exception 'O nome pode ter no máximo 60 caracteres.'; end if;
+  return trim(p);
+end $$;
+
+create or replace function public._validar_discord(p text, p_ignorar uuid) returns text
+language plpgsql stable security definer set search_path = public as $$
+declare d text := trim(coalesce(p, ''));
+begin
+  if d = '' then raise exception 'Informe o Discord do militar.'; end if;
+  if length(d) > 40 then raise exception 'O Discord pode ter no máximo 40 caracteres.'; end if;
+  if exists (select 1 from membros where lower(trim(discord)) = lower(d) and id is distinct from p_ignorar) then
+    raise exception 'Já existe um militar com esse Discord.';
+  end if;
+  return d;
+end $$;
+
+create or replace function public._validar_setor(p uuid) returns void
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if p is not null and not exists (select 1 from setores where id = p) then
+    raise exception 'Setor não encontrado.';
+  end if;
+end $$;
+
 create or replace function public._fechar_ponto(m membros) returns void
 language plpgsql security definer set search_path = public as $$
 begin
@@ -261,43 +367,42 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------
--- Ações do painel (RPC)
+-- Ações do efetivo (RPC)
 -- ---------------------------------------------------------------------
 
-create or replace function public.cadastrar_membro(p_nome text, p_passaporte text, p_discord text,
-                                                   p_patente int, p_ingresso date, p_obs text)
+create or replace function public.cadastrar_membro(p_nome text, p_discord text, p_patente int, p_setor uuid,
+                                                   p_ingresso date, p_obs text)
 returns uuid language plpgsql security definer set search_path = public as $$
-declare v membros; mx int;
+declare v membros; mx int; n text; d text;
 begin
   perform _exigir('cadastrar');
-  mx := minha_max_patente();
-  if p_patente is null or p_patente < 0 or p_patente > greatest(mx, 0) then
-    raise exception 'Você só pode cadastrar até a patente %.', patente_nome(greatest(mx, 0));
+  n := _validar_nome(p_nome);
+  d := _validar_discord(p_discord, null);
+  perform _validar_setor(p_setor);
+  mx := greatest(minha_max_patente(), 0);
+  if p_patente is null or p_patente < 0 or p_patente > mx then
+    raise exception 'Você só pode cadastrar até a patente %.', patente_nome(mx);
   end if;
-  insert into membros (nome, passaporte, discord, patente, ingresso, obs, criado_por)
-  values (trim(p_nome), trim(p_passaporte), coalesce(trim(p_discord), ''), p_patente,
-          coalesce(p_ingresso, current_date), coalesce(trim(p_obs), ''), auth.uid())
+  insert into membros (nome, discord, patente, setor_id, ingresso, obs, criado_por)
+  values (n, d, p_patente, p_setor, coalesce(p_ingresso, current_date), coalesce(trim(p_obs), ''), auth.uid())
   returning * into v;
-  perform _log('cadastro', v, 'Cadastrado como ' || patente_nome(v.patente), '');
+  perform _log('cadastro', v, 'Cadastrado como ' || patente_nome(v.patente)
+               || coalesce(' no Setor ' || (select nome from setores where id = p_setor), ''), '');
   return v.id;
-exception when unique_violation then
-  raise exception 'Já existe um militar com esse passaporte.';
 end $$;
 
-create or replace function public.editar_membro(p_id uuid, p_nome text, p_passaporte text, p_discord text,
-                                                p_ingresso date, p_obs text)
+create or replace function public.editar_membro(p_id uuid, p_nome text, p_discord text, p_ingresso date, p_obs text)
 returns void language plpgsql security definer set search_path = public as $$
-declare v membros;
+declare v membros; n text; d text;
 begin
   perform _exigir('editar');
   v := _carregar(p_id);
   perform _pode_agir(v);
-  update membros set nome = trim(p_nome), passaporte = trim(p_passaporte), discord = coalesce(trim(p_discord), ''),
-                     ingresso = coalesce(p_ingresso, ingresso), obs = coalesce(trim(p_obs), '')
+  n := _validar_nome(p_nome);
+  d := _validar_discord(p_discord, p_id);
+  update membros set nome = n, discord = d, ingresso = coalesce(p_ingresso, ingresso), obs = coalesce(trim(p_obs), '')
    where id = p_id returning * into v;
   perform _log('edicao', v, 'Dados atualizados', '');
-exception when unique_violation then
-  raise exception 'Já existe outro militar com esse passaporte.';
 end $$;
 
 create or replace function public.alterar_patente(p_id uuid, p_nova int, p_motivo text)
@@ -358,7 +463,7 @@ begin
   perform _pode_agir(v);
   if v.status = 'exonerado' then raise exception 'Militar já está exonerado.'; end if;
   perform _fechar_ponto(v);
-  update membros set status = 'exonerado' where id = p_id returning * into v;
+  update membros set status = 'exonerado', setor_id = null, funcao = null where id = p_id returning * into v;
   perform _log('exoneracao', v, '', mot);
 end $$;
 
@@ -442,12 +547,92 @@ declare v membros;
 begin
   if not is_adm() then raise exception 'Só o ADM Geral pode apagar cadastros.'; end if;
   v := _carregar(p_id);
+  if exists (select 1 from staff where membro_id = p_id) then
+    raise exception 'Essa ficha está ligada a uma conta. Remova o acesso da conta antes de apagar.';
+  end if;
   perform _log('remocao', v, 'Cadastro apagado', '');
   delete from membros where id = p_id;
 end $$;
 
 -- ---------------------------------------------------------------------
--- Acessos (ADM Geral)
+-- Setores e funções
+-- ---------------------------------------------------------------------
+
+create or replace function public.criar_setor(p_nome text)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare n text := trim(coalesce(p_nome, '')); sid uuid;
+begin
+  perform _exigir('setores');
+  if n = '' or length(n) > 40 then raise exception 'Informe um nome de setor com até 40 caracteres.'; end if;
+  insert into setores (nome, ordem) values (n, coalesce((select max(ordem) from setores), 0) + 1) returning id into sid;
+  perform _log('setor', null::membros, 'Setor ' || n || ' criado', '');
+  return sid;
+exception when unique_violation then
+  raise exception 'Já existe um setor com esse nome.';
+end $$;
+
+create or replace function public.renomear_setor(p_id uuid, p_nome text)
+returns void language plpgsql security definer set search_path = public as $$
+declare n text := trim(coalesce(p_nome, '')); antigo text;
+begin
+  perform _exigir('setores');
+  if n = '' or length(n) > 40 then raise exception 'Informe um nome de setor com até 40 caracteres.'; end if;
+  select nome into antigo from setores where id = p_id for update;
+  if not found then raise exception 'Setor não encontrado.'; end if;
+  update setores set nome = n where id = p_id;
+  perform _log('setor', null::membros, 'Setor ' || antigo || ' renomeado para ' || n, '');
+exception when unique_violation then
+  raise exception 'Já existe um setor com esse nome.';
+end $$;
+
+create or replace function public.apagar_setor(p_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare n text; qtd int;
+begin
+  perform _exigir('setores');
+  select nome into n from setores where id = p_id for update;
+  if not found then raise exception 'Setor não encontrado.'; end if;
+  update membros set setor_id = null, funcao = null where setor_id = p_id;
+  get diagnostics qtd = row_count;
+  delete from setores where id = p_id;
+  perform _log('setor', null::membros, 'Setor ' || n || ' apagado' ||
+               case when qtd > 0 then ' (' || qtd || ' militar' || case when qtd > 1 then 'es' else '' end || ' ficaram sem setor)' else '' end, '');
+end $$;
+
+-- Coloca o militar num setor (ou tira, com p_setor nulo) e define a função (ou nenhuma).
+-- Se a função já estiver ocupada no setor, quem ocupava perde a função.
+create or replace function public.definir_setor(p_id uuid, p_setor uuid, p_funcao text)
+returns void language plpgsql security definer set search_path = public as $$
+declare v membros; h membros; f text := nullif(trim(coalesce(p_funcao, '')), ''); sn text; antes text;
+begin
+  perform _exigir('setores');
+  v := _carregar(p_id);
+  perform _pode_agir(v);
+  if v.status <> 'ativo' then raise exception 'Militar exonerado não pode ser colocado em setor.'; end if;
+  perform _validar_setor(p_setor);
+  if f is not null and f not in ('1CMD','2CMD','1AUX','2AUX') then raise exception 'Função inválida.'; end if;
+  if p_setor is null then f := null; end if;
+  if v.setor_id is not distinct from p_setor and v.funcao is not distinct from f then return; end if;
+
+  antes := coalesce('Setor ' || (select nome from setores where id = v.setor_id), 'sem setor')
+           || coalesce(' · ' || funcao_sigla(v.funcao), '');
+  sn := (select nome from setores where id = p_setor);
+
+  if f is not null then
+    select * into h from membros where setor_id = p_setor and funcao = f and id <> p_id for update;
+    if found then
+      perform _pode_agir(h);
+      update membros set funcao = null where id = h.id;
+      perform _log('setor', h, 'Deixou de ser ' || funcao_sigla(f) || ' do Setor ' || sn, '');
+    end if;
+  end if;
+
+  update membros set setor_id = p_setor, funcao = f where id = p_id returning * into v;
+  perform _log('setor', v, antes || ' → ' || coalesce('Setor ' || sn, 'sem setor') || coalesce(' · ' || funcao_sigla(f), ''), '');
+end $$;
+
+-- ---------------------------------------------------------------------
+-- Contas e acessos (ADM Geral)
 -- ---------------------------------------------------------------------
 
 create or replace function public.existe_adm() returns boolean
@@ -466,27 +651,49 @@ begin
   end if;
   insert into staff (user_id, cargo, nome)
   values (auth.uid(), 'adm', coalesce((select nome_jogo from perfis where user_id = auth.uid()), 'ADM Geral'))
-  on conflict (user_id) do update set cargo = 'adm';
+  on conflict (user_id) do update set cargo = 'adm', membro_id = null;
 end $$;
 
-create or replace function public.definir_staff(p_user uuid, p_cargo text, p_nome text)
+-- Libera uma conta: liga a uma ficha existente (p_membro) ou cria uma ficha nova.
+create or replace function public.liberar_conta(p_user uuid, p_membro uuid, p_nome text, p_discord text,
+                                                p_patente int, p_setor uuid)
 returns void language plpgsql security definer set search_path = public as $$
+declare v membros; login text;
 begin
-  if not is_adm() then raise exception 'Só o ADM Geral gerencia acessos.'; end if;
-  if p_user = auth.uid() then raise exception 'Você não pode alterar o seu próprio cargo.'; end if;
-  if p_cargo not in ('federal','genadj','celgen','tengen','majgen') then raise exception 'Cargo inválido.'; end if;
-  if p_nome is null or length(trim(p_nome)) = 0 then raise exception 'Informe o nome no RP.'; end if;
-  if not exists (select 1 from perfis where user_id = p_user) then raise exception 'Usuário não encontrado.'; end if;
-  insert into staff (user_id, cargo, nome) values (p_user, p_cargo, trim(p_nome))
-  on conflict (user_id) do update set cargo = excluded.cargo, nome = excluded.nome;
+  if not is_adm() then raise exception 'Só o ADM Geral libera contas.'; end if;
+  if p_user = auth.uid() then raise exception 'Essa é a sua própria conta.'; end if;
+  select nome_jogo into login from perfis where user_id = p_user;
+  if not found then raise exception 'Conta não encontrada.'; end if;
+  if exists (select 1 from staff where user_id = p_user) then raise exception 'Essa conta já tem acesso.'; end if;
+
+  if p_membro is not null then
+    v := _carregar(p_membro);
+    if v.status <> 'ativo' then raise exception 'Essa ficha está exonerada. Readmita antes de ligar a uma conta.'; end if;
+    if exists (select 1 from staff where membro_id = p_membro) then raise exception 'Essa ficha já está ligada a outra conta.'; end if;
+  else
+    if p_patente is null or p_patente < 0 or p_patente > 13 then raise exception 'Escolha a patente.'; end if;
+    perform _validar_setor(p_setor);
+    insert into membros (nome, discord, patente, setor_id, criado_por)
+    values (_validar_nome(p_nome), _validar_discord(p_discord, null), p_patente, p_setor, auth.uid())
+    returning * into v;
+    perform _log('cadastro', v, 'Cadastrado como ' || patente_nome(v.patente) || ' ao liberar a conta', '');
+  end if;
+
+  insert into staff (user_id, cargo, nome, membro_id) values (p_user, 'membro', v.nome, v.id);
+  perform _log('acesso', v, 'Conta liberada (login: ' || coalesce(login, '?') || ')', '');
 end $$;
 
-create or replace function public.remover_staff(p_user uuid)
+create or replace function public.remover_acesso(p_user uuid)
 returns void language plpgsql security definer set search_path = public as $$
+declare s staff; v membros;
 begin
   if not is_adm() then raise exception 'Só o ADM Geral gerencia acessos.'; end if;
   if p_user = auth.uid() then raise exception 'Você não pode remover o seu próprio acesso.'; end if;
+  select * into s from staff where user_id = p_user for update;
+  if not found then raise exception 'Conta não encontrada.'; end if;
+  if s.membro_id is not null then select * into v from membros where id = s.membro_id; end if;
   delete from staff where user_id = p_user;
+  perform _log('acesso', v, 'Acesso ao painel removido (a ficha continua no efetivo)', '');
 end $$;
 
 create or replace function public.salvar_permissoes(p jsonb)
@@ -505,13 +712,14 @@ begin
       exonerar      = coalesce((v->>'exonerar')::boolean, exonerar),
       ponto         = coalesce((v->>'ponto')::boolean, ponto),
       ajustar_ponto = coalesce((v->>'ajustar_ponto')::boolean, ajustar_ponto),
+      setores       = coalesce((v->>'setores')::boolean, setores),
       max_patente   = least(greatest(coalesce((v->>'max_patente')::int, max_patente), 0), nivel_cargo(k) - 1)
     where cargo = k;
   end loop;
 end $$;
 
 -- ---------------------------------------------------------------------
--- Perfil automático no cadastro (nome no jogo + usuário de login)
+-- Perfil automático no cadastro de conta (nome no jogo + usuário de login)
 -- ---------------------------------------------------------------------
 create or replace function public._sync_perfil() returns trigger
 language plpgsql security definer set search_path = public as $$
@@ -529,14 +737,13 @@ create trigger on_auth_user_sync
   after insert or update of raw_user_meta_data on auth.users
   for each row execute function public._sync_perfil();
 
--- Contas que já existiam antes deste script
 insert into public.perfis (user_id, nome_jogo, usuario)
 select id, coalesce(raw_user_meta_data->>'nome_jogo', split_part(email, '@', 1)),
            coalesce(raw_user_meta_data->>'usuario', split_part(email, '@', 1))
 from auth.users
 on conflict (user_id) do nothing;
 
--- ADM Geral redefine a senha de um oficial que esqueceu (não há e-mail de recuperação)
+-- ADM Geral redefine a senha de quem esqueceu (não há e-mail de recuperação)
 create or replace function public.redefinir_senha(p_user uuid, p_senha text)
 returns void language plpgsql security definer set search_path = public, extensions as $$
 begin
@@ -547,22 +754,25 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------
--- Segurança: leitura só para quem tem cargo, escrita só pelas funções
+-- Segurança: leitura só para quem tem acesso, escrita só pelas funções
 -- ---------------------------------------------------------------------
 alter table public.perfis      enable row level security;
 alter table public.staff       enable row level security;
 alter table public.cargo_perms enable row level security;
+alter table public.setores     enable row level security;
 alter table public.membros     enable row level security;
 alter table public.punicoes    enable row level security;
 alter table public.ponto       enable row level security;
 alter table public.historico   enable row level security;
 
 drop policy if exists leitura on public.perfis;
-create policy leitura on public.perfis      for select to authenticated using (user_id = auth.uid() or is_staff());
+create policy leitura on public.perfis      for select to authenticated using (user_id = auth.uid() or is_adm());
 drop policy if exists leitura on public.staff;
 create policy leitura on public.staff       for select to authenticated using (user_id = auth.uid() or is_staff());
 drop policy if exists leitura on public.cargo_perms;
 create policy leitura on public.cargo_perms for select to authenticated using (is_staff());
+drop policy if exists leitura on public.setores;
+create policy leitura on public.setores     for select to authenticated using (is_staff());
 drop policy if exists leitura on public.membros;
 create policy leitura on public.membros     for select to authenticated using (is_staff());
 drop policy if exists leitura on public.punicoes;
@@ -573,10 +783,10 @@ drop policy if exists leitura on public.historico;
 create policy leitura on public.historico   for select to authenticated using (is_staff());
 
 revoke insert, update, delete, truncate on
-  public.perfis, public.staff, public.cargo_perms, public.membros, public.punicoes, public.ponto, public.historico
+  public.perfis, public.staff, public.cargo_perms, public.setores, public.membros, public.punicoes, public.ponto, public.historico
   from anon, authenticated;
 revoke select on
-  public.perfis, public.staff, public.cargo_perms, public.membros, public.punicoes, public.ponto, public.historico
+  public.perfis, public.staff, public.cargo_perms, public.setores, public.membros, public.punicoes, public.ponto, public.historico
   from anon;
 
 -- Funções: só usuários logados chamam; as internas (_) ninguém chama de fora
@@ -587,6 +797,9 @@ revoke execute on function public._pode_agir(membros)              from authenti
 revoke execute on function public._carregar(uuid)                  from authenticated;
 revoke execute on function public._log(text, membros, text, text)  from authenticated;
 revoke execute on function public._exigir_motivo(text)             from authenticated;
+revoke execute on function public._validar_nome(text)              from authenticated;
+revoke execute on function public._validar_discord(text, uuid)     from authenticated;
+revoke execute on function public._validar_setor(uuid)             from authenticated;
 revoke execute on function public._fechar_ponto(membros)           from authenticated;
 revoke execute on function public._sync_perfil()                   from authenticated;
 
@@ -596,7 +809,7 @@ revoke execute on function public._sync_perfil()                   from authenti
 do $$
 declare t text;
 begin
-  foreach t in array array['perfis','staff','cargo_perms','membros','punicoes','ponto','historico'] loop
+  foreach t in array array['perfis','staff','cargo_perms','setores','membros','punicoes','ponto','historico'] loop
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
       execute format('alter publication supabase_realtime add table public.%I', t);
