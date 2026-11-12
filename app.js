@@ -91,7 +91,15 @@ async function boot(){
   if (!CFG.SUPABASE_URL || CFG.SUPABASE_URL.includes("SEU-PROJETO") || !CFG.SUPABASE_ANON_KEY || CFG.SUPABASE_ANON_KEY.includes("COLE-AQUI")) {
     S.fase = "config"; render(); return;
   }
-  sb = createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY);
+  // Aceita a URL colada com sobras (/rest/v1/, barra final, espaços): usa só https://ID.supabase.co
+  let url = String(CFG.SUPABASE_URL).trim();
+  const m = url.match(/^https?:\/\/[^\/\s]+/);
+  url = m ? m[0] : url;
+  if (/supabase\.com$/.test(url)) {
+    const ref = String(CFG.SUPABASE_URL).match(/project\/([a-z0-9]+)/i);
+    if (ref) url = `https://${ref[1]}.supabase.co`;
+  }
+  sb = createClient(url, String(CFG.SUPABASE_ANON_KEY).trim());
   sb.auth.onAuthStateChange((ev, sess) => {
     if (ev === "SIGNED_OUT") { location.reload(); return; }
     if (sess && !S.session) { S.session = sess; entrar(); }
