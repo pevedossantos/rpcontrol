@@ -92,9 +92,17 @@ const LOADERS = {
   cargo_perms: async () => { const rows = await q(sb.from("cargo_perms").select("*")); S.perms = Object.fromEntries(rows.map(r => [r.cargo, r])); },
   perfis:      async () => { S.perfis   = isAdm() ? await q(sb.from("perfis").select("user_id,nome_jogo,usuario,criado_em").order("criado_em",{ascending:false})) : []; }
 };
+// Cada parte carrega sozinha: se uma falhar, as outras continuam aparecendo
 async function carregar(nomes){
-  try { await Promise.all(nomes.map(n => LOADERS[n]())); }
-  catch (e) { toast("Erro ao carregar dados: " + (e.message || e), "err"); }
+  const res = await Promise.allSettled(nomes.map(n => LOADERS[n]()));
+  const falhas = res.map((r, i) => r.status === "rejected" ? { parte: nomes[i], e: r.reason } : null).filter(Boolean);
+  if (!falhas.length) return;
+  const msg = falhas.map(f => String(f.e?.message || f.e || "")).join(" ");
+  if (/schema cache|does not exist|could not find the (table|function)/i.test(msg)) {
+    toast("O banco do Supabase está desatualizado em relação ao site. Rode o supabase/schema.sql mais recente no SQL Editor e recarregue a página.", "err");
+  } else {
+    toast("Não foi possível carregar " + falhas.map(f => f.parte).join(", ") + ": " + msg, "err");
+  }
 }
 const pendentes = new Set(); let tRefetch = null;
 function agendar(tabela){
