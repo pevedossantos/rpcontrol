@@ -320,9 +320,10 @@ function vGeral(){
   const roubos7 = new Set(ars7.map(a => a.data + "|" + a.hora)).size;
   const pres7 = ev7.reduce((n, e) => n + e.presentes.length, 0) + ars7.reduce((n, a) => n + a.presentes.length, 0);
   const punAt = S.punicoes.filter(p => p.ativa);
+  const MAX_DIST = 9; // Efetivo por patente: de Major General para baixo
   const cont = PAT.map((_, i) => ativos.filter(m => Number(m.patente) === i).length);
-  const mx = Math.max(1, ...cont);
-  let dist = ""; for (let i = PAT.length - 1; i >= 0; i--) dist += `<div class="dist-row"><span>${chip(i)}</span><div class="bar"><i class="${i >= 9 ? "gen" : ""}" style="width:${cont[i]/mx*100}%"></i></div><span class="num" style="text-align:right">${cont[i]}</span></div>`;
+  const mx = Math.max(1, ...cont.slice(0, MAX_DIST + 1));
+  let dist = ""; for (let i = MAX_DIST; i >= 0; i--) dist += `<div class="dist-row"><span>${chip(i)}</span><div class="bar"><i class="${i >= 9 ? "gen" : ""}" style="width:${cont[i]/mx*100}%"></i></div><span class="num" style="text-align:right">${cont[i]}</span></div>`;
   return `
   <section class="kpis">
     <div class="kpi"><div class="v num">${ativos.length}</div><div class="k">Efetivo ativo</div></div>
@@ -508,6 +509,13 @@ function celResumo(c){
 }
 const contaLista = l => ({ a: l?.presentes.length || 0, j: l?.justificados.length || 0, i: l?.inativos.length || 0 });
 const somaC = cs => cs.reduce((t, c) => ({ a: t.a + c.a, j: t.j + c.j, i: t.i + c.i }), { a: 0, j: 0, i: 0 });
+// Totais do dia sem repetir o mesmo militar em vários horários: vale a melhor situação (ativo > justificado > inativo)
+function somaDistinta(listas){
+  const peso = { a: 3, j: 2, i: 1 }, melhor = new Map();
+  const marca = (id, k) => { if ((peso[melhor.get(id)] || 0) < peso[k]) melhor.set(id, k); };
+  for (const l of listas) { if (!l) continue; l.presentes.forEach(p => marca(p.id, "a")); l.justificados.forEach(p => marca(p.id, "j")); l.inativos.forEach(p => marca(p.id, "i")); }
+  const c = { a: 0, j: 0, i: 0 }; melhor.forEach(k => c[k]++); return c;
+}
 // Painel da Visão geral (só Tenente General para cima)
 function painelResumoArsenal(){
   if (!podeResumo() || !S.setores.length) return "";
@@ -515,22 +523,23 @@ function painelResumoArsenal(){
   if (!S.resFiltro) S.resFiltro = "todos";
   const d = S.resData;
   const doDia = S.arsenal.filter(a => a.data === d);
-  const porHora = h => somaC(doDia.filter(a => a.hora === h).map(contaLista));
-  const legenda = S.resFiltro === "todos" ? `<span class="n-a">ativos</span> <span class="n-j">justificados</span> <span class="n-i">inativos</span>` : S.resFiltro === "ativos" ? "Números = ativos." : "Números = justificados.";
+  const porHora = h => somaDistinta(doDia.filter(a => a.hora === h));
+  const legenda = (S.resFiltro === "todos" ? `<span class="n-a">ativos</span> <span class="n-j">justificados</span> <span class="n-i">inativos</span>.` : S.resFiltro === "ativos" ? "Números = ativos." : "Números = justificados.")
+    + " Nos totais, cada militar conta uma vez por dia, mesmo que tenha ido a mais de um horário (vale a melhor situação).";
   return `<section class="panel"><div class="panel-h"><h2>Roubo do Arsenal · resumo do dia</h2>
       <span class="sp toolbar"><input class="input" type="date" id="resData" value="${esc(d)}" max="${hojeISO()}" aria-label="Dia do resumo">
       <button class="btn sm" data-a="resDia" data-id="0">Hoje</button><button class="btn sm" data-a="resDia" data-id="1">Ontem</button>
       <span class="seg" role="group" aria-label="Mostrar">${RES_FILTROS.map(([k, n]) => `<button class="${S.resFiltro === k ? "on" : ""}" data-a="resFiltro" data-id="${k}" aria-pressed="${S.resFiltro === k}">${n}</button>`).join("")}</span>
       <button class="btn sm" data-a="arsCopiar" ${doDia.length ? "" : "disabled"}>Copiar resumo</button></span></div>
     <div class="tablewrap"><table class="resumo res-${S.resFiltro}"><thead><tr><th>Setor</th>${HORAS_ARSENAL.map(h => `<th>${h}h</th>`).join("")}<th>Total</th></tr></thead><tbody>
-    ${S.setores.map(st => { const linha = HORAS_ARSENAL.map(h => listaArsenal(d, h, st.id)); const tot = somaC(linha.map(contaLista));
+    ${S.setores.map(st => { const linha = HORAS_ARSENAL.map(h => listaArsenal(d, h, st.id)); const tot = somaDistinta(linha);
       return `<tr><td>${esc(st.nome)}</td>${linha.map((l, i) => `<td><button class="cel ${l ? "tem" : ""}" data-a="abrirArs" data-id="${d}|${HORAS_ARSENAL[i]}|${st.id}" title="${l ? `${l.presentes.length} ativos, ${l.justificados.length} justificados, ${l.inativos.length} inativos` : "Abrir a lista"}">${l ? celResumo(contaLista(l)) : "—"}</button></td>`).join("")}<td class="num"><b>${celResumo(tot)}</b></td></tr>`; }).join("")}
-    <tr class="tot"><td>Total</td>${HORAS_ARSENAL.map(h => `<td class="num">${celResumo(porHora(h))}</td>`).join("")}<td class="num">${celResumo(somaC(doDia.map(contaLista)))}</td></tr>
+    <tr class="tot"><td>Total</td>${HORAS_ARSENAL.map(h => `<td class="num">${celResumo(porHora(h))}</td>`).join("")}<td class="num">${celResumo(somaDistinta(doDia))}</td></tr>
     </tbody></table></div>
-    <div class="res-m">${S.setores.map(st => { const linha = HORAS_ARSENAL.map(h => listaArsenal(d, h, st.id)); const tot = somaC(linha.map(contaLista));
+    <div class="res-m">${S.setores.map(st => { const linha = HORAS_ARSENAL.map(h => listaArsenal(d, h, st.id)); const tot = somaDistinta(linha);
       return `<div class="res-m-setor"><div class="res-m-h"><b>${esc(st.nome)}</b><span>${celResumo(tot)}</span></div>
         <div class="res-m-horas">${linha.map((l, i) => `<button class="cel ${l ? "tem" : ""}" data-a="abrirArs" data-id="${d}|${HORAS_ARSENAL[i]}|${st.id}"><small>${HORAS_ARSENAL[i]}h</small><span>${l ? celResumo(contaLista(l)) : "—"}</span></button>`).join("")}</div></div>`; }).join("")}
-      <div class="res-m-setor res-m-tot"><div class="res-m-h"><b>Total do dia</b><span>${celResumo(somaC(doDia.map(contaLista)))}</span></div></div></div>
+      <div class="res-m-setor res-m-tot"><div class="res-m-h"><b>Total do dia</b><span>${celResumo(somaDistinta(doDia))}</span></div></div></div>
     <div class="panel-b muted" style="font-size:12px">${legenda}</div></section>`;
 }
 
@@ -539,6 +548,8 @@ function textoResumoArsenal(){
   const d = S.resData || hojeISO(), f = S.resFiltro || "todos";
   const pl = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
   const L = [`**Roubo do Arsenal · ${new Date(d + "T12:00:00").toLocaleDateString("pt-BR")}**${f === "ativos" ? " · só ativos" : f === "justificados" ? " · só justificados" : ""}`];
+  const dia = somaDistinta(S.arsenal.filter(a => a.data === d));
+  L.push(`No dia, sem repetir militar: ` + (f === "ativos" ? pl(dia.a, "ativo") : f === "justificados" ? pl(dia.j, "justificado") : `${pl(dia.a, "ativo")}, ${pl(dia.j, "justificado")}, ${pl(dia.i, "inativo")}`));
   const nome = p => mById(p.id) ? mLabel(mById(p.id)) : p.nome;
   for (const h of HORAS_ARSENAL) {
     const ls = S.arsenal.filter(a => a.data === d && a.hora === h);
