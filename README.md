@@ -72,6 +72,15 @@ O painel usa o login por e-mail do Supabase por baixo dos panos: o nome do jogo 
 
 ---
 
+## No celular
+
+O painel foi feito para ser usado principalmente no celular:
+- Barra de navegação embaixo (**Início, Efetivo, Presença, Eventos, Mais**). Em **Mais** ficam Setores, Histórico,
+  Acessos, Trocar senha e Sair.
+- Listas viram cartões, formulários abrem em tela cheia e os campos não dão zoom no iPhone.
+- **Instalar como app:** no iPhone, abra o site no Safari → Compartilhar → **Adicionar à Tela de Início**.
+  No Android, Chrome → menu ⋮ → **Instalar app** (ou Adicionar à tela inicial).
+
 ## Acessos e permissões
 
 Cada conta é ligada a uma ficha do efetivo, e **a patente da ficha define o acesso**:

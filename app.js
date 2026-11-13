@@ -239,8 +239,43 @@ async function rpc(fn, args, ok){
 }
 
 /* ===== Render ===== */
+/* ===== Celular: barra de navegação inferior ===== */
+const IC = {
+  geral:'<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
+  efetivo:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.3-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><circle cx="17" cy="9" r="2.6"/><path d="M16.5 14.6c2.6.2 4.5 1.9 5 5.4"/>',
+  arsenal:'<rect x="4" y="3.5" width="16" height="17" rx="2"/><path d="M8 9l2 2 4-4M8 15h8"/>',
+  eventos:'<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  mais:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  setores:'<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>',
+  historico:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/>',
+  acessos:'<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
+  senha:'<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l2.5 2.5M14 9l2 2"/>',
+  sair:'<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l-4-4 4-4M6 12h10"/>'
+};
+const icone = k => `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${IC[k]}</svg>`;
+const NAV_BAIXO = [["geral","Início"],["efetivo","Efetivo"],["arsenal","Presença"],["eventos","Eventos"]];
+function renderNavCelular(){
+  const nav = $("#bottomnav"), sheet = $("#sheet-root");
+  if (S.fase !== "app") { nav.innerHTML = ""; sheet.innerHTML = ""; document.body.classList.remove("tem-nav"); return; }
+  document.body.classList.add("tem-nav");
+  const noMais = !NAV_BAIXO.some(([k]) => k === S.tab);
+  nav.innerHTML = NAV_BAIXO.map(([k, n]) => `<button data-a="tab" data-id="${k}" class="${S.tab === k ? "on" : ""}" aria-current="${S.tab === k ? "page" : "false"}">${icone(k)}<span>${n}</span></button>`).join("")
+    + `<button data-a="mais" class="${noMais || S.maisAberto ? "on" : ""}" aria-expanded="${!!S.maisAberto}">${icone("mais")}<span>Mais</span></button>`;
+  if (!S.maisAberto) { sheet.innerHTML = ""; return; }
+  const mf = S.me?.membro_id && mById(S.me.membro_id);
+  const itens = [["setores","Setores"],["historico","Histórico"]].concat(isAdm() ? [["acessos","Acessos e limites"]] : []);
+  sheet.innerHTML = `<div class="sheet-scrim" data-a="maisFechar"></div><div class="sheet" role="dialog" aria-label="Mais opções">
+    <div class="sheet-quem">${mf ? chip(mf.patente) : ""}<b>${esc(mf ? mf.nome : (S.me?.nome || S.nomeJogo))}</b><span class="pill ok">${esc(meLabel())}</span></div>
+    ${itens.map(([k, n]) => `<button class="sheet-item ${S.tab === k ? "on" : ""}" data-a="tab" data-id="${k}">${icone(k)}<span>${n}</span></button>`).join("")}
+    <div class="sheet-sep"></div>
+    <button class="sheet-item" data-a="trocarSenha">${icone("senha")}<span>Trocar senha</span></button>
+    <button class="sheet-item perigo" data-a="sair">${icone("sair")}<span>Sair</span></button>
+  </div>`;
+}
+
 function render(){
   renderWho();
+  renderNavCelular();
   const tabs = [["geral","Visão geral"],["efetivo","Efetivo"],["setores","Setores"],["arsenal","Lista de presença"],["eventos","Eventos"],["historico","Histórico"]];
   if (isAdm()) tabs.push(["acessos","Acessos"]);
   $("#tabs").innerHTML = S.fase === "app" ? tabs.map(([k,n]) => `<button class="tab" role="tab" data-a="tab" data-id="${k}" aria-selected="${S.tab === k}">${n}</button>`).join("") : "";
@@ -256,7 +291,7 @@ function renderWho(){
   const w = $("#who");
   if (!S.session) { w.innerHTML = ""; return; }
   const mf = S.me?.membro_id && mById(S.me.membro_id);
-  w.innerHTML = `${mf ? chip(mf.patente) : ""}<span class="nm">${esc(mf ? mf.nome : (S.me?.nome || S.nomeJogo))}</span><span class="pill ${S.meuCargo ? "ok" : "mut"}">${esc(meLabel())}</span><button class="btn sm" data-a="trocarSenha">Trocar senha</button><button class="btn sm" data-a="sair">Sair</button>`;
+  w.innerHTML = `${mf ? chip(mf.patente) : ""}<span class="nm">${esc(mf ? mf.nome : (S.me?.nome || S.nomeJogo))}</span><span class="pill ${S.meuCargo ? "ok" : "mut"}">${esc(meLabel())}</span><span class="so-pc"><button class="btn sm" data-a="trocarSenha">Trocar senha</button><button class="btn sm" data-a="sair">Sair</button></span>${S.fase !== "app" ? `<button class="btn sm so-cel" data-a="sair">Sair</button>` : ""}`;
 }
 function vConfig(){ return `<div class="gate"><h2>Falta configurar</h2><p>Preencha <b>SUPABASE_URL</b> e <b>SUPABASE_ANON_KEY</b> no arquivo <span class="mono">config.js</span>. O passo a passo está no README do repositório.</p></div>`; }
 function vLogin(){
@@ -343,15 +378,15 @@ function vEfetivo(){
       <select class="input" id="fSetor" aria-label="Filtrar por setor"><option value="">Todos os setores</option>${S.setores.map(x => `<option value="${x.id}" ${S.fSetor === x.id ? "selected" : ""}>${esc(x.nome)}</option>`).join("")}<option value="-" ${S.fSetor === "-" ? "selected" : ""}>Sem setor</option></select>
       <select class="input" id="fStatus" aria-label="Filtrar por situação"><option value="ativo" ${S.fStatus === "ativo" ? "selected" : ""}>Ativos</option><option value="exonerado" ${S.fStatus === "exonerado" ? "selected" : ""}>Exonerados</option><option value="todos" ${S.fStatus === "todos" ? "selected" : ""}>Todos</option></select>
     </div>
-    ${list.length ? `<div class="tablewrap"><table><thead><tr><th>Patente</th><th>Nome</th><th>Discord</th><th>Setor</th><th>Presenças</th><th>Punições</th><th>Situação</th></tr></thead><tbody>
+    ${list.length ? `<div class="tablewrap"><table class="cards cards-efetivo"><thead><tr><th>Patente</th><th>Nome</th><th>Discord</th><th>Setor</th><th>Presenças</th><th>Punições</th><th>Situação</th></tr></thead><tbody>
     ${list.map(m => { const pc = punCount[m.id] || 0; const ex = m.status === "exonerado"; const pt = S.presTot[m.id]?.total || 0; const p30 = pres30(m.id);
-      return `<tr class="click ${ex ? "dim" : ""}" tabindex="0" data-a="abrir" data-id="${m.id}"><td>${chip(m.patente)}</td>
-      <td><b>${esc(m.nome)}</b>${contaDe(m.id) ? ` <span class="pill mut" title="Tem login no painel">conta</span>` : ""}</td>
-      <td>${m.discord ? esc(m.discord) : `<span class="pill warn">sem Discord</span>`}</td>
-      <td>${m.setorId && setorById(m.setorId) ? `${esc(setorNome(m.setorId))} ${fnChip(m.funcao)}` : `<span class="muted">—</span>`}</td>
-      <td class="num">${pt}${p30 ? ` <span class="muted" style="font-size:12px">(${p30} em 30d)</span>` : ""}</td>
-      <td>${pc ? `<span class="pill bad">${pc} ativa${pc > 1 ? "s" : ""}</span>` : `<span class="muted">—</span>`}</td>
-      <td>${ex ? `<span class="pill mut">Exonerado</span>` : `<span class="pill ok">Ativo</span>`}</td></tr>`; }).join("")}
+      return `<tr class="click ${ex ? "dim" : ""}" tabindex="0" data-a="abrir" data-id="${m.id}"><td class="c-pat">${chip(m.patente)}</td>
+      <td class="c-nome"><b>${esc(m.nome)}</b>${contaDe(m.id) ? ` <span class="pill mut" title="Tem login no painel">conta</span>` : ""}</td>
+      <td class="c-disc" data-label="Discord">${m.discord ? esc(m.discord) : `<span class="pill warn">sem Discord</span>`}</td>
+      <td class="c-setor" data-label="Setor">${m.setorId && setorById(m.setorId) ? `${esc(setorNome(m.setorId))} ${fnChip(m.funcao)}` : `<span class="muted">—</span>`}</td>
+      <td class="num c-pres" data-label="Presenças">${pt}${p30 ? ` <span class="muted" style="font-size:12px">(${p30} em 30d)</span>` : ""}</td>
+      <td class="c-pun" data-label="Punições">${pc ? `<span class="pill bad">${pc} ativa${pc > 1 ? "s" : ""}</span>` : `<span class="muted">—</span>`}</td>
+      <td class="c-sit">${ex ? `<span class="pill mut">Exonerado</span>` : `<span class="pill ok">Ativo</span>`}</td></tr>`; }).join("")}
     </tbody></table></div>` : `<div class="empty">${S.membros.length ? "Nenhum militar com esses filtros." : "Nenhum militar cadastrado ainda." + (can("cadastrar") ? " Use “Cadastrar militar” para começar." : "")}</div>`}
   </section>`;
 }
@@ -491,7 +526,12 @@ function painelResumoArsenal(){
     ${S.setores.map(st => { const linha = HORAS_ARSENAL.map(h => listaArsenal(d, h, st.id)); const tot = somaC(linha.map(contaLista));
       return `<tr><td>${esc(st.nome)}</td>${linha.map((l, i) => `<td><button class="cel ${l ? "tem" : ""}" data-a="abrirArs" data-id="${d}|${HORAS_ARSENAL[i]}|${st.id}" title="${l ? `${l.presentes.length} ativos, ${l.justificados.length} justificados, ${l.inativos.length} inativos` : "Abrir a lista"}">${l ? celResumo(contaLista(l)) : "—"}</button></td>`).join("")}<td class="num"><b>${celResumo(tot)}</b></td></tr>`; }).join("")}
     <tr class="tot"><td>Total</td>${HORAS_ARSENAL.map(h => `<td class="num">${celResumo(porHora(h))}</td>`).join("")}<td class="num">${celResumo(somaC(doDia.map(contaLista)))}</td></tr>
-    </tbody></table></div><div class="panel-b muted" style="font-size:12px">${legenda}</div></section>`;
+    </tbody></table></div>
+    <div class="res-m">${S.setores.map(st => { const linha = HORAS_ARSENAL.map(h => listaArsenal(d, h, st.id)); const tot = somaC(linha.map(contaLista));
+      return `<div class="res-m-setor"><div class="res-m-h"><b>${esc(st.nome)}</b><span>${celResumo(tot)}</span></div>
+        <div class="res-m-horas">${linha.map((l, i) => `<button class="cel ${l ? "tem" : ""}" data-a="abrirArs" data-id="${d}|${HORAS_ARSENAL[i]}|${st.id}"><small>${HORAS_ARSENAL[i]}h</small><span>${l ? celResumo(contaLista(l)) : "—"}</span></button>`).join("")}</div></div>`; }).join("")}
+      <div class="res-m-setor res-m-tot"><div class="res-m-h"><b>Total do dia</b><span>${celResumo(somaC(doDia.map(contaLista)))}</span></div></div></div>
+    <div class="panel-b muted" style="font-size:12px">${legenda}</div></section>`;
 }
 
 function contHTML(c){ return `<span class="pill ok">${c.ativo} ativo${c.ativo === 1 ? "" : "s"}</span> <span class="pill warn">${c.justificado} justificado${c.justificado === 1 ? "" : "s"}</span> <span class="pill bad">${c.inativo} inativo${c.inativo === 1 ? "" : "s"}</span>`; }
@@ -575,10 +615,10 @@ function vEventos(){
   </section>
   <div class="grid2 ev-grid">
     <section class="panel"><div class="panel-h"><h2>Lista de eventos</h2></div>
-      ${lista.length ? `<div class="tablewrap"><table><thead><tr><th>Data e hora</th><th>Tipo</th><th>Título</th><th>Presentes</th><th>Registrado por</th></tr></thead><tbody>
-      ${lista.map(e => `<tr class="click" tabindex="0" data-a="abrirEv" data-id="${e.id}"><td class="num" style="white-space:nowrap">${fmtTs(e.data)}</td><td><span class="tipo-tag ${e.treino ? "treino" : ""}">${esc(e.tipo || "Evento")}</span></td>
-        <td><b>${esc(e.titulo || "—")}</b>${e.treino && e.instrutor ? `<div class="muted" style="font-size:12px">Instrutor: ${esc(e.instrutor)}</div>` : ""}${e.fotos.length ? `<div class="muted" style="font-size:12px">${e.fotos.length} foto${e.fotos.length > 1 ? "s" : ""}</div>` : ""}</td>
-        <td class="num">${e.presentes.length}</td><td class="muted" style="font-size:13px">${esc(e.porLabel || "—")}</td></tr>`).join("")}
+      ${lista.length ? `<div class="tablewrap"><table class="cards cards-eventos"><thead><tr><th>Data e hora</th><th>Tipo</th><th>Título</th><th>Presentes</th><th>Registrado por</th></tr></thead><tbody>
+      ${lista.map(e => `<tr class="click" tabindex="0" data-a="abrirEv" data-id="${e.id}"><td class="num c-data" style="white-space:nowrap">${fmtTs(e.data)}</td><td class="c-tipo"><span class="tipo-tag ${e.treino ? "treino" : ""}">${esc(e.tipo || "Evento")}</span></td>
+        <td class="c-tit"><b>${esc(e.titulo || "—")}</b>${e.treino && e.instrutor ? `<div class="muted" style="font-size:12px">Instrutor: ${esc(e.instrutor)}</div>` : ""}${e.fotos.length ? `<div class="muted" style="font-size:12px">${e.fotos.length} foto${e.fotos.length > 1 ? "s" : ""}</div>` : ""}</td>
+        <td class="num c-pres" data-label="Presentes">${e.presentes.length}</td><td class="muted c-por" style="font-size:13px" data-label="Registrado por">${esc(e.porLabel || "—")}</td></tr>`).join("")}
       </tbody></table></div>` : `<div class="empty">${S.eventos.length ? "Nenhum evento com esses filtros." : "Nenhum evento registrado ainda." + (S.podeRegistrar ? " Use “Registrar evento” para começar." : "")}</div>`}
     </section>
     <section class="panel"><div class="panel-h"><h2>Presença no período</h2></div>
@@ -660,10 +700,15 @@ function vAcessos(){
   </section>
   <section class="panel"><div class="panel-h"><h2>Limites de cada cargo</h2><span class="sp" style="display:flex;gap:8px"><button class="btn" data-a="resetPerm">Restaurar padrão</button><button class="btn pri" data-a="savePerm">Salvar limites</button></span></div>
     <div class="panel-b"><div class="note">Regra fixa para todos: o oficial só promove, pune, edita, exonera ou move de setor militares de patente abaixo da dele. O ADM Geral não tem limites. Esses limites são conferidos pelo banco de dados, não só pela tela.</div></div>
-    <div class="tablewrap"><table class="matrix"><thead><tr><th>Permissão</th>${CARGOS.map(c => `<th>${c.n}</th>`).join("")}</tr></thead><tbody>
+    <div class="tablewrap matrix-wrap"><table class="matrix"><thead><tr><th>Permissão</th>${CARGOS.map(c => `<th>${c.n}</th>`).join("")}</tr></thead><tbody>
     ${PERMS.map(([k,n]) => `<tr><td>${n}</td>${CARGOS.map(c => `<td><input type="checkbox" data-a="perm" data-c="${c.k}" data-p="${k}" ${D[c.k][k] ? "checked" : ""} aria-label="${n} para ${c.n}"></td>`).join("")}</tr>`).join("")}
     <tr><td>Patente máxima que pode conceder</td>${CARGOS.map(c => `<td><select class="input" data-a="permMax" data-c="${c.k}" aria-label="Patente máxima para ${c.n}">${PAT.slice(0, c.lv).map((p,i) => `<option value="${i}" ${Number(D[c.k].max_patente) === i ? "selected" : ""}>${esc(p[1])}</option>`).join("")}</select></td>`).join("")}</tr>
     </tbody></table></div>
+    <div class="matrix-m">
+      <div class="field"><label for="permCargoM">Cargo</label><select class="input" id="permCargoM">${CARGOS.map(c => `<option value="${c.k}" ${c.k === (S.permCargoM || "federal") ? "selected" : ""}>${c.n}</option>`).join("")}</select></div>
+      ${(() => { const c = CARGOS.find(x => x.k === (S.permCargoM || "federal")); return PERMS.map(([k, n]) => `<label class="perm-m"><span>${n}</span><input type="checkbox" data-a="perm" data-c="${c.k}" data-p="${k}" ${D[c.k][k] ? "checked" : ""}></label>`).join("")
+        + `<div class="perm-m"><span>Patente máxima que pode conceder</span><select class="input" data-a="permMax" data-c="${c.k}">${PAT.slice(0, c.lv).map((p,i) => `<option value="${i}" ${Number(D[c.k].max_patente) === i ? "selected" : ""}>${esc(p[1])}</option>`).join("")}</select></div>`; })()}
+    </div>
   </section>`;
 }
 
@@ -994,12 +1039,14 @@ document.addEventListener("click", e => {
   switch (a) {
     case "modoCriar": S.authModo = "criar"; render(); break;
     case "modoEntrar": S.authModo = "entrar"; render(); break;
-    case "trocarSenha": mTrocarSenha(); break;
+    case "trocarSenha": S.maisAberto = false; renderNavCelular(); mTrocarSenha(); break;
     case "resetSenha": { const s2 = S.staff.find(x => x.user_id === id); s2 && mResetSenha(s2); break; }
     case "sair": sb.auth.signOut(); break;
     case "verificar": recarregarMeuCargo(); break;
     case "assumirAdm": (async () => { const { error } = await sb.rpc("assumir_adm"); if (error) toast(error.message, "err"); else { toast("Você agora é o ADM Geral."); recarregarMeuCargo(); } })(); break;
-    case "tab": S.tab = id; S.sel = null; S.selEv = null; if (id !== "acessos") S.permDraft = null; render(); window.scrollTo(0, 0); break;
+    case "mais": S.maisAberto = !S.maisAberto; renderNavCelular(); break;
+    case "maisFechar": S.maisAberto = false; renderNavCelular(); break;
+    case "tab": S.maisAberto = false; S.tab = id; S.sel = null; S.selEv = null; if (id !== "acessos") S.permDraft = null; render(); window.scrollTo(0, 0); break;
     case "abrir": S.sel = id; renderDrawer(); break;
     case "fechar": if (S.sel && S.selEv) S.sel = null; else { S.sel = null; S.selEv = null; } renderDrawer(); break;
     case "novo": if (can("cadastrar")) mNovo(); break;
@@ -1089,6 +1136,7 @@ document.addEventListener("change", e => {
   if (t.id === "fPat") { S.fPat = t.value; render(); }
   else if (t.id === "fSetor") { S.fSetor = t.value; render(); }
   else if (t.id === "fTipo") { S.fTipo = t.value; render(); }
+  else if (t.id === "permCargoM") { S.permCargoM = t.value; render(); }
   else if (t.id === "resData") { if (t.value) { S.resData = t.value > today() ? today() : t.value; render(); } }
   else if (t.id === "arsData") { if (t.value) trocarArsenal("arsData", t.value > today() ? today() : t.value); }
   else if (t.id === "arsSetor") { const v = t.value; t.value = S.arsSetor; trocarArsenal("arsSetor", v); }
@@ -1117,6 +1165,7 @@ document.addEventListener("change", e => {
   else if (t.dataset.a === "permMax") S.permDraft[t.dataset.c].max_patente = Number(t.value);
 });
 document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && S.maisAberto) { S.maisAberto = false; renderNavCelular(); return; }
   if (e.key === "Escape") { if ($("#modal-root").innerHTML) closeModal(); else if (S.sel || S.selEv) { if (S.sel && S.selEv) S.sel = null; else { S.sel = null; S.selEv = null; } renderDrawer(); } }
   if (e.key === "Enter" && e.target.matches("tr[data-a='abrir']")) { S.sel = e.target.dataset.id; renderDrawer(); }
   if (e.key === "Enter" && e.target.matches("[data-a='abrirEv']")) { S.selEv = e.target.dataset.id; S.sel = null; renderDrawer(); }
