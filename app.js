@@ -8,16 +8,16 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 /* ===== Tabelas fixas (espelham o banco) ===== */
 const PAT = [["Recruta","REC"],["Soldado","SLD"],["Sargento","SGT"],["1º Sargento","1 SGT"],["Sargento Mor","SGT MOR"],["Tenente","TEN"],["Capitão","CAP"],["Major","MAJ"],["Coronel","CEL"],["Major General","MAJ GEN"],["Tenente General","TEN GEN"],["Coronel General","CEL GEN"],["General Adjunto","GEN ADJ"],["Federal","FEDERAL"]];
 const CARGOS = [{k:"federal",n:"Federal",lv:13},{k:"genadj",n:"General Adjunto",lv:12},{k:"celgen",n:"Coronel General",lv:11},{k:"tengen",n:"Tenente General",lv:10},{k:"majgen",n:"Major General",lv:9}];
-const PERMS = [["cadastrar","Cadastrar membros"],["editar","Editar dados dos membros"],["promover","Promover e rebaixar"],["punir","Aplicar punições"],["revogar","Revogar punições"],["exonerar","Exonerar e readmitir"],["ponto","Bater ponto (entrada e saída)"],["ajustar_ponto","Ajustar horas e apagar registros de ponto"],["setores","Gerenciar setores e funções"]];
+const PERMS = [["cadastrar","Cadastrar membros"],["editar","Editar dados dos membros"],["promover","Promover e rebaixar"],["punir","Aplicar punições"],["revogar","Revogar punições"],["exonerar","Exonerar e readmitir"],["presenca","Registrar eventos e lista de presença"],["ajustar_presenca","Editar e apagar eventos de outros e gerenciar tipos de evento"],["setores","Gerenciar setores e funções"]];
 const DEF = {
-  federal:{cadastrar:true,editar:true,promover:true,punir:true,revogar:true,exonerar:true,ponto:true,ajustar_ponto:true,setores:true,max_patente:12},
-  genadj:{cadastrar:true,editar:true,promover:true,punir:true,revogar:true,exonerar:true,ponto:true,ajustar_ponto:true,setores:true,max_patente:11},
-  celgen:{cadastrar:true,editar:true,promover:true,punir:true,revogar:false,exonerar:true,ponto:true,ajustar_ponto:false,setores:true,max_patente:10},
-  tengen:{cadastrar:true,editar:true,promover:true,punir:true,revogar:false,exonerar:false,ponto:true,ajustar_ponto:false,setores:false,max_patente:9},
-  majgen:{cadastrar:true,editar:false,promover:true,punir:true,revogar:false,exonerar:false,ponto:true,ajustar_ponto:false,setores:false,max_patente:8}
+  federal:{cadastrar:true,editar:true,promover:true,punir:true,revogar:true,exonerar:true,presenca:true,ajustar_presenca:true,setores:true,max_patente:12},
+  genadj:{cadastrar:true,editar:true,promover:true,punir:true,revogar:true,exonerar:true,presenca:true,ajustar_presenca:true,setores:true,max_patente:11},
+  celgen:{cadastrar:true,editar:true,promover:true,punir:true,revogar:false,exonerar:true,presenca:true,ajustar_presenca:false,setores:true,max_patente:10},
+  tengen:{cadastrar:true,editar:true,promover:true,punir:true,revogar:false,exonerar:false,presenca:true,ajustar_presenca:false,setores:false,max_patente:9},
+  majgen:{cadastrar:true,editar:false,promover:true,punir:true,revogar:false,exonerar:false,presenca:true,ajustar_presenca:false,setores:false,max_patente:8}
 };
 const PUN_TIPOS = ["Advertência verbal","Advertência escrita","Suspensão","Detenção"];
-const HIST_TIPOS = {cadastro:"Cadastro",promocao:"Promoção",rebaixamento:"Rebaixamento",punicao:"Punição",revogacao:"Revogação de punição",exoneracao:"Exoneração",readmissao:"Readmissão",edicao:"Edição de dados",ajuste_ponto:"Ajuste de ponto",remocao:"Registro apagado",setor:"Setores e funções",acesso:"Acesso ao painel"};
+const HIST_TIPOS = {cadastro:"Cadastro",promocao:"Promoção",rebaixamento:"Rebaixamento",punicao:"Punição",revogacao:"Revogação de punição",exoneracao:"Exoneração",readmissao:"Readmissão",edicao:"Edição de dados",ajuste_ponto:"Ajuste de ponto",remocao:"Registro apagado",setor:"Setores e funções",acesso:"Acesso ao painel",evento:"Eventos"};
 const FUNCOES = [["1CMD","1º Comando","1 CMD"],["2CMD","2º Comando","2 CMD"],["1AUX","1º Auxiliar","1 AUX"],["2AUX","2º Auxiliar","2 AUX"]];
 const fnSigla = f => FUNCOES.find(x => x[0] === f)?.[2] || "";
 const fnNome = f => FUNCOES.find(x => x[0] === f)?.[1] || "";
@@ -33,7 +33,8 @@ const emailDe = nome => slugUsuario(nome) + "@" + DOMINIO_LOGIN;
 let sb = null;
 const S = {
   fase:"carregando", err:null, session:null, uid:null, nomeJogo:"", authModo:"entrar",
-  me:null, meuCargo:null, membros:[], setores:[], punicoes:[], ponto:[], hist:[], staff:[], perms:{}, perfis:[],
+  me:null, meuCargo:null, podeRegistrar:false, membros:[], setores:[], punicoes:[], eventos:[], tipos:[], presTot:{}, hist:[], staff:[], perms:{}, perfis:[],
+  selEv:null, fTipo:"", fDe:"", fAte:"", qEv:"", fotoUrl:{},
   tab:"geral", sel:null, q:"", fPat:"", fStatus:"ativo", fSetor:"", fHist:"", permDraft:null, busy:false, entrando:false
 };
 
@@ -73,6 +74,8 @@ function toast(msg, kind){ const r = $("#toast-root"); r.innerHTML = `<div class
 const mapM = r => ({id:r.id,nome:r.nome,discord:r.discord,setorId:r.setor_id,funcao:r.funcao,patente:r.patente,status:r.status,ingresso:r.ingresso,obs:r.obs,totalMs:Number(r.total_ms)||0,servico:r.servico_inicio?{inicio:ms(r.servico_inicio),sessao:r.servico_sessao}:null});
 const mapP = r => ({id:r.id,membroId:r.membro_id,tipo:r.tipo,dias:r.dias,motivo:r.motivo,ativa:r.ativa,porLabel:r.por_label,em:ms(r.em),revogadaEm:ms(r.revogada_em)});
 const mapPt = r => ({id:r.id,membroId:r.membro_id,membroNome:r.membro_nome,inicio:ms(r.inicio),fim:ms(r.fim),porLabel:r.por_label});
+const mapEv = r => ({id:r.id,tipoId:r.tipo_id,tipo:r.tipo_nome,treino:r.treinamento,titulo:r.titulo,data:ms(r.data_hora),instrutorId:r.instrutor_id,instrutor:r.instrutor_nome,descricao:r.descricao,fotos:r.fotos||[],criadoPor:r.criado_por,porLabel:r.criado_por_label,
+  presentes:(r.presencas||[]).map(p => ({id:p.membro_id, nome:p.membro_nome}))});
 const mapH = r => ({id:r.id,tipo:r.tipo,membroId:r.membro_id,membroNome:r.membro_nome,texto:r.texto,motivo:r.motivo,porLabel:r.por_label,em:ms(r.em)});
 
 /* ===== Carregamento ===== */
@@ -80,7 +83,9 @@ async function q(promise){ const { data, error } = await promise; if (error) thr
 const LOADERS = {
   membros:     async () => { S.membros  = (await q(sb.from("membros").select("*").limit(2000))).map(mapM); },
   punicoes:    async () => { S.punicoes = (await q(sb.from("punicoes").select("*").order("em",{ascending:false}).limit(2000))).map(mapP); },
-  ponto:       async () => { S.ponto    = (await q(sb.from("ponto").select("*").order("inicio",{ascending:false}).limit(1000))).map(mapPt); },
+  eventos:     async () => { S.eventos  = (await q(sb.from("eventos").select("*, presencas(membro_id, membro_nome)").order("data_hora",{ascending:false}).limit(500))).map(mapEv); },
+  presencas:   async () => { const rows = await q(sb.rpc("presencas_por_membro")); S.presTot = Object.fromEntries(rows.map(r => [r.membro_id, {total:Number(r.total), ultima:ms(r.ultima)}])); },
+  tipos_evento: async () => { S.tipos   = await q(sb.from("tipos_evento").select("*").order("ordem").order("nome")); },
   historico:   async () => { S.hist     = (await q(sb.from("historico").select("*").order("em",{ascending:false}).limit(500))).map(mapH); },
   setores:     async () => { S.setores  = await q(sb.from("setores").select("*").order("ordem").order("nome")); },
   staff:       async () => { S.staff    = await q(sb.from("staff").select("*")); },
@@ -95,6 +100,8 @@ const pendentes = new Set(); let tRefetch = null;
 function agendar(tabela){
   if (tabela === "staff" || tabela === "membros") verificarCargo();
   if (tabela === "staff") { recarregarMeuCargo(); return; }
+  if (tabela === "presencas") { pendentes.add("eventos"); }
+  if (tabela === "eventos") { pendentes.add("presencas"); }
   if (!LOADERS[tabela]) return;
   pendentes.add(tabela); clearTimeout(tRefetch);
   tRefetch = setTimeout(async () => { const n = [...pendentes]; pendentes.clear(); await carregar(n); render(); }, 250);
@@ -155,7 +162,6 @@ async function entrar(){
   S.nomeJogo = meta.nome_jogo || String(u.email || "").split("@")[0] || "Você";
   sb.channel("solano").on("postgres_changes", { event: "*", schema: "public" }, p => agendar(p.table)).subscribe();
   await recarregarMeuCargo();
-  setInterval(() => document.querySelectorAll("[data-since]").forEach(el => el.textContent = fmtDur(Date.now() - Number(el.dataset.since))), 30000);
 }
 async function recarregarMeuCargo(){
   try {
@@ -167,11 +173,12 @@ async function recarregarMeuCargo(){
       const { data: existe, error: e2 } = await sb.rpc("existe_adm");
       if (e2) throw e2;
       S.meuCargo = null; S.fase = existe ? "pendente" : "sem-adm";
-      S.membros = []; S.setores = []; S.punicoes = []; S.ponto = []; S.hist = []; S.staff = []; S.perfis = [];
+      S.membros = []; S.setores = []; S.punicoes = []; S.eventos = []; S.presTot = {}; S.hist = []; S.staff = []; S.perfis = [];
     } else {
       const { data: c, error: e3 } = await sb.rpc("meu_cargo");
       if (e3) throw e3;
       S.meuCargo = c || null;
+      const { data: pr } = await sb.rpc("pode_registrar"); S.podeRegistrar = !!pr;
       if (!S.meuCargo) { S.fase = "suspenso"; render(); return; }
       if (S.fase !== "app" || antes !== S.meuCargo) { await carregar(Object.keys(LOADERS)); S.permDraft = null; }
       else { await carregar(["staff", "perfis"]); }
@@ -188,6 +195,8 @@ function verificarCargo(){
   tCargo = setTimeout(async () => {
     if (!S.me) return;
     const { data: c, error } = await sb.rpc("meu_cargo");
+    const { data: pr } = await sb.rpc("pode_registrar");
+    if (!error && (c || null) === S.meuCargo && !!pr !== S.podeRegistrar) { S.podeRegistrar = !!pr; render(); }
     if (!error && (c || null) !== S.meuCargo) {
       recarregarMeuCargo();
       if (S.meuCargo && c) toast("Seu nível de acesso mudou para: " + nivelLabel(c) + ".");
@@ -202,7 +211,7 @@ async function rpc(fn, args, ok){
     const { error } = await sb.rpc(fn, args);
     if (error) throw error;
     if (ok) toast(ok);
-    await carregar(["membros","setores","punicoes","ponto","historico","staff"]); render();
+    await carregar(["membros","setores","punicoes","eventos","presencas","tipos_evento","historico","staff"]); render();
     return true;
   } catch (e) { toast(e.message || "Não foi possível salvar. Tente de novo.", "err"); return false; }
   finally { S.busy = false; }
@@ -211,14 +220,14 @@ async function rpc(fn, args, ok){
 /* ===== Render ===== */
 function render(){
   renderWho();
-  const tabs = [["geral","Visão geral"],["efetivo","Efetivo"],["setores","Setores"],["ponto","Ponto"],["historico","Histórico"]];
+  const tabs = [["geral","Visão geral"],["efetivo","Efetivo"],["setores","Setores"],["eventos","Eventos"],["historico","Histórico"]];
   if (isAdm()) tabs.push(["acessos","Acessos"]);
   $("#tabs").innerHTML = S.fase === "app" ? tabs.map(([k,n]) => `<button class="tab" role="tab" data-a="tab" data-id="${k}" aria-selected="${S.tab === k}">${n}</button>`).join("") : "";
   const app = $("#app");
   const f = document.activeElement; const fid = f && f.id && app.contains(f) ? f.id : null; let ss = null, se = null;
   if (fid) { try { ss = f.selectionStart; se = f.selectionEnd; } catch {} }
   app.innerHTML = ({config:vConfig, login:vLogin, pendente:vPendente, suspenso:vSuspenso, "sem-adm":vSemAdm, erro:vErro, carregando:() => `<div class="loading">Carregando…</div>`}[S.fase]
-    || (() => ({geral:vGeral, efetivo:vEfetivo, setores:vSetores, ponto:vPonto, historico:vHist, acessos:vAcessos}[S.tab] || vGeral)()))();
+    || (() => ({geral:vGeral, efetivo:vEfetivo, setores:vSetores, eventos:vEventos, historico:vHist, acessos:vAcessos}[S.tab] || vGeral)()))();
   if (fid) { const n = document.getElementById(fid); if (n) { n.focus(); try { if (ss != null) n.setSelectionRange(ss, se); } catch {} } }
   renderDrawer();
 }
@@ -247,31 +256,30 @@ function vSuspenso(){ return `<div class="gate"><h2>Acesso suspenso</h2><p>Sua c
 function vSemAdm(){ return `<div class="gate"><h2>Primeiro acesso</h2><p>Ainda não existe um ADM Geral neste painel. Se você é o responsável pela base, assuma agora. Depois disso a opção some para todo mundo.</p><button class="btn pri" data-a="assumirAdm">Assumir como ADM Geral</button></div>`; }
 function vErro(){ return `<div class="gate"><h2>Erro</h2><p>${esc(S.err)}</p><button class="btn" data-a="verificar">Tentar de novo</button></div>`; }
 
-function hora7(){ const lim = Date.now() - 7*864e5; const tot = {}; for (const p of S.ponto) { const ini = Math.max(p.inicio, lim); const fim = p.fim || Date.now(); if (fim > ini && p.membroId) tot[p.membroId] = (tot[p.membroId] || 0) + (fim - ini); } return tot; }
 
 function vGeral(){
   const ativos = S.membros.filter(m => m.status !== "exonerado");
-  const emServ = ativos.filter(m => m.servico).sort((a,b) => a.servico.inicio - b.servico.inicio);
+  const ev7 = S.eventos.filter(e => e.data >= Date.now() - 7*864e5);
+  const pres7 = ev7.reduce((n, e) => n + e.presentes.length, 0);
   const punAt = S.punicoes.filter(p => p.ativa);
-  const lim = Date.now() - 7*864e5;
-  const promo7 = S.hist.filter(h => h.tipo === "promocao" && h.em >= lim).length;
   const cont = PAT.map((_, i) => ativos.filter(m => Number(m.patente) === i).length);
   const mx = Math.max(1, ...cont);
   let dist = ""; for (let i = PAT.length - 1; i >= 0; i--) dist += `<div class="dist-row"><span>${chip(i)}</span><div class="bar"><i class="${i >= 9 ? "gen" : ""}" style="width:${cont[i]/mx*100}%"></i></div><span class="num" style="text-align:right">${cont[i]}</span></div>`;
   return `
   <section class="kpis">
     <div class="kpi"><div class="v num">${ativos.length}</div><div class="k">Efetivo ativo</div></div>
-    <div class="kpi"><div class="v num" style="color:var(--ok)">${emServ.length}</div><div class="k">Em serviço agora</div></div>
+    <div class="kpi"><div class="v num" style="color:var(--ok)">${ev7.length}</div><div class="k">Eventos em 7 dias</div></div>
+    <div class="kpi"><div class="v num">${pres7}</div><div class="k">Presenças em 7 dias</div></div>
     <div class="kpi"><div class="v num" style="color:${punAt.length ? "var(--bad)" : "inherit"}">${punAt.length}</div><div class="k">Punições ativas</div></div>
-    <div class="kpi"><div class="v num">${promo7}</div><div class="k">Promoções em 7 dias</div></div>
+
   </section>
   <div class="grid2">
     <section class="panel"><div class="panel-h"><h2>Efetivo por patente</h2></div><div class="panel-b dist">${dist}</div></section>
     ${painelSetores(ativos)}
   </div>
   <div class="grid2">
-    <section class="panel"><div class="panel-h"><h2>Em serviço agora</h2><span class="sp"><button class="btn sm" data-a="tab" data-id="ponto">Abrir ponto</button></span></div>
-      ${emServ.length ? `<div class="list">${emServ.map(m => `<div class="li">${chip(m.patente)}<span class="grow"><a href="#" data-a="abrir" data-id="${m.id}" style="color:inherit">${esc(m.nome)}</a></span><span class="pill ok"><span class="dot pulse"></span><span data-since="${m.servico.inicio}">${fmtDur(Date.now() - m.servico.inicio)}</span></span></div>`).join("")}</div>` : `<div class="empty">Ninguém em serviço no momento.</div>`}
+    <section class="panel"><div class="panel-h"><h2>Últimos eventos</h2><span class="sp"><button class="btn sm" data-a="tab" data-id="eventos">Abrir eventos</button></span></div>
+      ${S.eventos.length ? `<div class="list">${S.eventos.slice(0, 6).map(e => `<div class="li click-li" data-a="abrirEv" data-id="${e.id}" tabindex="0"><span class="tipo-tag ${e.treino ? "treino" : ""}">${esc(e.tipo || "Evento")}</span><span class="grow"><b>${esc(e.titulo || e.tipo)}</b><div class="muted" style="font-size:12px">${fmtTs(e.data)} · ${esc(e.porLabel || "")}</div></span><span class="pill mut num">${e.presentes.length} presente${e.presentes.length === 1 ? "" : "s"}</span></div>`).join("")}</div>` : `<div class="empty">Nenhum evento registrado ainda.</div>`}
     </section>
     <section class="panel"><div class="panel-h"><h2>Últimos registros</h2><span class="sp"><button class="btn sm" data-a="tab" data-id="historico">Ver histórico</button></span></div>${feed(S.hist.slice(0, 6))}</section>
   </div>`;
@@ -310,15 +318,15 @@ function vEfetivo(){
       <select class="input" id="fSetor" aria-label="Filtrar por setor"><option value="">Todos os setores</option>${S.setores.map(x => `<option value="${x.id}" ${S.fSetor === x.id ? "selected" : ""}>${esc(x.nome)}</option>`).join("")}<option value="-" ${S.fSetor === "-" ? "selected" : ""}>Sem setor</option></select>
       <select class="input" id="fStatus" aria-label="Filtrar por situação"><option value="ativo" ${S.fStatus === "ativo" ? "selected" : ""}>Ativos</option><option value="exonerado" ${S.fStatus === "exonerado" ? "selected" : ""}>Exonerados</option><option value="todos" ${S.fStatus === "todos" ? "selected" : ""}>Todos</option></select>
     </div>
-    ${list.length ? `<div class="tablewrap"><table><thead><tr><th>Patente</th><th>Nome</th><th>Discord</th><th>Setor</th><th>Horas totais</th><th>Punições</th><th>Situação</th></tr></thead><tbody>
-    ${list.map(m => { const pc = punCount[m.id] || 0; const ex = m.status === "exonerado"; const tot = m.totalMs + (m.servico ? Date.now() - m.servico.inicio : 0);
+    ${list.length ? `<div class="tablewrap"><table><thead><tr><th>Patente</th><th>Nome</th><th>Discord</th><th>Setor</th><th>Presenças</th><th>Punições</th><th>Situação</th></tr></thead><tbody>
+    ${list.map(m => { const pc = punCount[m.id] || 0; const ex = m.status === "exonerado"; const pt = S.presTot[m.id]?.total || 0; const p30 = pres30(m.id);
       return `<tr class="click ${ex ? "dim" : ""}" tabindex="0" data-a="abrir" data-id="${m.id}"><td>${chip(m.patente)}</td>
       <td><b>${esc(m.nome)}</b>${contaDe(m.id) ? ` <span class="pill mut" title="Tem login no painel">conta</span>` : ""}</td>
       <td>${m.discord ? esc(m.discord) : `<span class="pill warn">sem Discord</span>`}</td>
       <td>${m.setorId && setorById(m.setorId) ? `${esc(setorNome(m.setorId))} ${fnChip(m.funcao)}` : `<span class="muted">—</span>`}</td>
-      <td class="num">${fmtDur(tot)}</td>
+      <td class="num">${pt}${p30 ? ` <span class="muted" style="font-size:12px">(${p30} em 30d)</span>` : ""}</td>
       <td>${pc ? `<span class="pill bad">${pc} ativa${pc > 1 ? "s" : ""}</span>` : `<span class="muted">—</span>`}</td>
-      <td>${ex ? `<span class="pill mut">Exonerado</span>` : m.servico ? `<span class="pill ok"><span class="dot pulse"></span>Em serviço</span>` : `<span class="pill mut">Fora de serviço</span>`}</td></tr>`; }).join("")}
+      <td>${ex ? `<span class="pill mut">Exonerado</span>` : `<span class="pill ok">Ativo</span>`}</td></tr>`; }).join("")}
     </tbody></table></div>` : `<div class="empty">${S.membros.length ? "Nenhum militar com esses filtros." : "Nenhum militar cadastrado ainda." + (can("cadastrar") ? " Use “Cadastrar militar” para começar." : "")}</div>`}
   </section>`;
 }
@@ -348,26 +356,111 @@ function vSetores(){
     </section>`;
 }
 
-function vPonto(){
-  const ativos = S.membros.filter(m => m.status !== "exonerado");
-  const emServ = ativos.filter(m => m.servico).sort((a,b) => a.servico.inicio - b.servico.inicio);
-  const fora = ativos.filter(m => !m.servico).sort((a,b) => b.patente - a.patente || String(a.nome).localeCompare(String(b.nome), "pt-BR"));
-  const t7 = hora7();
-  const rank = Object.entries(t7).map(([id, v]) => ({m: mById(id), v})).filter(x => x.m).sort((a,b) => b.v - a.v).slice(0, 15);
-  const rmax = Math.max(1, ...rank.map(r => r.v));
-  return `<div class="grid2">
-  <section class="panel"><div class="panel-h"><h2>Em serviço agora</h2><span class="muted num">${emServ.length}</span></div>
-    ${can("ponto") ? `<div class="panel-b toolbar"><select class="input" id="pontoSel" style="flex:1 1 220px" aria-label="Militar para registrar entrada"><option value="">Selecione um militar…</option>${fora.map(m => `<option value="${m.id}">${esc(mLabel(m))}${m.setorId ? " · " + esc(setorNome(m.setorId)) : ""}</option>`).join("")}</select><button class="btn pri" data-a="entradaSel">Registrar entrada</button></div>` : ""}
-    ${emServ.length ? `<div class="list">${emServ.map(m => `<div class="li">${chip(m.patente)}<span class="grow"><a href="#" data-a="abrir" data-id="${m.id}" style="color:inherit">${esc(m.nome)}</a><div class="muted" style="font-size:12px">Entrou ${fmtTs(m.servico.inicio)}</div></span><span class="pill ok"><span class="dot pulse"></span><span data-since="${m.servico.inicio}">${fmtDur(Date.now() - m.servico.inicio)}</span></span>${can("ponto") ? `<button class="btn sm" data-a="saida" data-id="${m.id}">Registrar saída</button>` : ""}</div>`).join("")}</div>` : `<div class="empty">Ninguém em serviço no momento.</div>`}
+
+/* ===== Eventos e lista de presença ===== */
+function pres30(id){ const lim = Date.now() - 30*864e5; let n = 0; for (const e of S.eventos) { if (e.data < lim) break; if (e.presentes.some(p => p.id === id)) n++; } return n; }
+const podeEditarEv = e => isAdm() || can("ajustar_presenca") || (e.criadoPor === S.uid && S.podeRegistrar);
+const podeTipos = () => isAdm() || can("ajustar_presenca");
+const tipoById = id => S.tipos.find(t => t.id === id);
+function toLocalInput(t){ const d = new Date(t); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); }
+function fromLocalInput(v){ return v ? new Date(v).getTime() : null; }
+function eventosFiltrados(){
+  const de = fromLocalInput(S.fDe), ate = fromLocalInput(S.fAte), qq = S.qEv.trim().toLowerCase();
+  return S.eventos.filter(e => (!S.fTipo || e.tipoId === S.fTipo || (S.fTipo === "-" && !tipoById(e.tipoId)))
+    && (de == null || e.data >= de) && (ate == null || e.data <= ate)
+    && (!qq || (e.titulo + " " + e.tipo + " " + e.instrutor + " " + e.presentes.map(p => (mById(p.id)?.nome || p.nome)).join(" ")).toLowerCase().includes(qq)));
+}
+function periodoTexto(){
+  const f = v => v ? new Date(v).toLocaleString("pt-BR", {day:"2-digit", month:"2-digit", year:"2-digit", hour:"2-digit", minute:"2-digit"}) : null;
+  const a = f(S.fDe), b = f(S.fAte);
+  return a && b ? `${a} até ${b}` : a ? `a partir de ${a}` : b ? `até ${b}` : "todas as datas";
+}
+function rankingPresenca(lista){
+  const c = {};
+  for (const e of lista) for (const p of e.presentes) c[p.id] = (c[p.id] || 0) + 1;
+  return Object.entries(c).map(([id, n]) => ({ id, n, m: mById(id), nome: lista.flatMap(e => e.presentes).find(p => p.id === id)?.nome }))
+    .sort((a,b) => b.n - a.n || (b.m?.patente ?? 0) - (a.m?.patente ?? 0));
+}
+function vEventos(){
+  const lista = eventosFiltrados();
+  const totPres = lista.reduce((n, e) => n + e.presentes.length, 0);
+  const rank = rankingPresenca(lista);
+  const rmax = Math.max(1, ...rank.map(r => r.n));
+  return `<section class="panel">
+    <div class="panel-h"><h2>Eventos</h2><span class="muted num">${S.eventos.length} registrados</span>
+      <span class="sp" style="display:flex;gap:8px">${podeTipos() ? `<button class="btn" data-a="tiposEv">Tipos de evento</button>` : ""}${S.podeRegistrar ? `<button class="btn pri" data-a="novoEv">+ Registrar evento</button>` : ""}</span></div>
+    <div class="panel-b toolbar">
+      <select class="input" id="fTipo" aria-label="Filtrar por tipo"><option value="">Todos os tipos</option>${S.tipos.map(t => `<option value="${t.id}" ${S.fTipo === t.id ? "selected" : ""}>${esc(t.nome)}</option>`).join("")}</select>
+      <label class="dt"><span>De</span><input class="input" type="datetime-local" id="fDe" value="${esc(S.fDe)}"></label>
+      <label class="dt"><span>Até</span><input class="input" type="datetime-local" id="fAte" value="${esc(S.fAte)}"></label>
+      <input class="input search" id="qEv" type="search" placeholder="Buscar por título, instrutor ou participante" value="${esc(S.qEv)}" aria-label="Buscar eventos">
+    </div>
+    <div class="panel-b toolbar" style="padding-top:0">
+      <span class="muted" style="font-size:13px">Período rápido:</span>
+      <button class="btn sm" data-a="periodo" data-id="hoje">Hoje</button><button class="btn sm" data-a="periodo" data-id="7">7 dias</button><button class="btn sm" data-a="periodo" data-id="30">30 dias</button><button class="btn sm" data-a="periodo" data-id="limpar">Limpar filtros</button>
+    </div>
   </section>
-  <section class="panel"><div class="panel-h"><h2>Horas nos últimos 7 dias</h2></div>
-    ${rank.length ? `<div class="panel-b dist">${rank.map(r => `<div class="dist-row" style="grid-template-columns:minmax(120px,1.2fr) 1fr 74px"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(mLabel(r.m))}</span><div class="bar"><i style="width:${r.v/rmax*100}%"></i></div><span class="num" style="text-align:right">${fmtDur(r.v)}</span></div>`).join("")}</div>` : `<div class="empty">Sem registros de ponto nos últimos 7 dias.</div>`}
-  </section></div>
-  <section class="panel"><div class="panel-h"><h2>Registros de ponto</h2><span class="muted">últimos ${Math.min(S.ponto.length, 60)}</span></div>
-    ${S.ponto.length ? `<div class="tablewrap"><table><thead><tr><th>Militar</th><th>Entrada</th><th>Saída</th><th>Duração</th><th>Registrado por</th>${can("ajustar_ponto") ? "<th></th>" : ""}</tr></thead><tbody>
-    ${S.ponto.slice(0, 60).map(p => { const m = mById(p.membroId); return `<tr><td>${m ? `${chip(m.patente)} ${esc(m.nome)}` : `<span class="muted">${esc(p.membroNome || "Removido")}</span>`}</td><td class="num">${fmtTs(p.inicio)}</td><td class="num">${p.fim ? fmtTs(p.fim) : `<span class="pill ok">Em aberto</span>`}</td><td class="num">${fmtDur((p.fim || Date.now()) - p.inicio)}</td><td class="muted">${esc(p.porLabel || "—")}</td>${can("ajustar_ponto") ? `<td>${p.fim ? `<button class="btn sm danger" data-a="apagarPonto" data-id="${p.id}">Apagar</button>` : ""}</td>` : ""}</tr>`; }).join("")}
-    </tbody></table></div>` : `<div class="empty">Nenhum registro de ponto ainda.</div>`}
-  </section>`;
+  <section class="kpis">
+    <div class="kpi"><div class="v num">${lista.length}</div><div class="k">Eventos no filtro</div></div>
+    <div class="kpi"><div class="v num">${totPres}</div><div class="k">Presenças</div></div>
+    <div class="kpi"><div class="v num">${rank.length}</div><div class="k">Militares diferentes</div></div>
+    <div class="kpi" style="display:flex;flex-direction:column;justify-content:center;gap:6px"><div class="k" style="margin:0">${esc(periodoTexto())}</div><button class="btn sm" data-a="copiarRel" ${lista.length ? "" : "disabled"}>Copiar relatório</button></div>
+  </section>
+  <div class="grid2 ev-grid">
+    <section class="panel"><div class="panel-h"><h2>Lista de eventos</h2></div>
+      ${lista.length ? `<div class="tablewrap"><table><thead><tr><th>Data e hora</th><th>Tipo</th><th>Título</th><th>Presentes</th><th>Registrado por</th></tr></thead><tbody>
+      ${lista.map(e => `<tr class="click" tabindex="0" data-a="abrirEv" data-id="${e.id}"><td class="num" style="white-space:nowrap">${fmtTs(e.data)}</td><td><span class="tipo-tag ${e.treino ? "treino" : ""}">${esc(e.tipo || "Evento")}</span></td>
+        <td><b>${esc(e.titulo || "—")}</b>${e.treino && e.instrutor ? `<div class="muted" style="font-size:12px">Instrutor: ${esc(e.instrutor)}</div>` : ""}${e.fotos.length ? `<div class="muted" style="font-size:12px">${e.fotos.length} foto${e.fotos.length > 1 ? "s" : ""}</div>` : ""}</td>
+        <td class="num">${e.presentes.length}</td><td class="muted" style="font-size:13px">${esc(e.porLabel || "—")}</td></tr>`).join("")}
+      </tbody></table></div>` : `<div class="empty">${S.eventos.length ? "Nenhum evento com esses filtros." : "Nenhum evento registrado ainda." + (S.podeRegistrar ? " Use “Registrar evento” para começar." : "")}</div>`}
+    </section>
+    <section class="panel"><div class="panel-h"><h2>Presença no período</h2></div>
+      ${rank.length ? `<div class="panel-b dist">${rank.slice(0, 40).map(r => `<div class="dist-row" style="grid-template-columns:minmax(120px,1.3fr) 1fr 30px"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.m ? `<a href="#" data-a="abrir" data-id="${r.id}" style="color:inherit">${esc(mLabel(r.m))}</a>` : esc(r.nome || "Removido")}</span><div class="bar"><i style="width:${r.n/rmax*100}%"></i></div><span class="num" style="text-align:right">${r.n}</span></div>`).join("")}</div>` : `<div class="empty">Sem presenças no período.</div>`}
+    </section>
+  </div>`;
+}
+function textoRelatorio(){
+  const lista = eventosFiltrados().slice().sort((a,b) => a.data - b.data);
+  const tipo = S.fTipo ? (tipoById(S.fTipo)?.nome || "—") : "Todos";
+  const rank = rankingPresenca(lista);
+  const L = [];
+  L.push("**Relatório de eventos · Exército de Solano**");
+  L.push(`Período: ${periodoTexto()} · Tipo: ${tipo}`);
+  L.push(`${lista.length} evento${lista.length === 1 ? "" : "s"} · ${lista.reduce((n, e) => n + e.presentes.length, 0)} presenças · ${rank.length} militares`);
+  L.push("");
+  for (const e of lista) {
+    L.push(`• ${fmtTs(e.data)} · ${e.tipo}${e.titulo ? " · " + e.titulo : ""} (${e.presentes.length} presente${e.presentes.length === 1 ? "" : "s"})${e.treino && e.instrutor ? " · Instrutor: " + e.instrutor : ""}`);
+    L.push("  " + e.presentes.map(p => mById(p.id) ? mLabel(mById(p.id)) : p.nome).join(", "));
+  }
+  L.push(""); L.push("**Presença por militar**");
+  for (const r of rank) L.push(`${r.m ? mLabel(r.m) : r.nome}: ${r.n}`);
+  return L.join("\n");
+}
+async function carregarFotos(e){
+  const falta = e.fotos.filter(f => !S.fotoUrl[f]);
+  if (!falta.length) return;
+  const { data, error } = await sb.storage.from("eventos").createSignedUrls(falta, 3600);
+  if (error) { toast("Não foi possível carregar as fotos: " + error.message, "err"); return; }
+  for (const r of data || []) if (r.signedUrl) S.fotoUrl[r.path] = r.signedUrl;
+  if (S.selEv === e.id) renderDrawer();
+}
+function drawerEvento(e){
+  const pres = e.presentes.map(p => ({ ...p, m: mById(p.id) })).sort((a,b) => (b.m?.patente ?? -1) - (a.m?.patente ?? -1) || String(a.m?.nome || a.nome).localeCompare(String(b.m?.nome || b.nome), "pt-BR"));
+  const ed = podeEditarEv(e);
+  if (e.fotos.some(f => !S.fotoUrl[f])) carregarFotos(e);
+  return `<div class="scrim" data-a="fechar"></div>
+  <aside class="drawer" role="dialog" aria-label="Evento">
+    <div class="dr-h"><div style="flex:1"><div style="display:flex;gap:8px;align-items:center;margin-bottom:6px"><span class="tipo-tag ${e.treino ? "treino" : ""}">${esc(e.tipo || "Evento")}</span><span class="muted num" style="font-size:13px">${fmtTs(e.data)}</span></div>
+      <h2>${esc(e.titulo || e.tipo || "Evento")}</h2>
+      <div class="muted" style="font-size:13px;margin-top:6px">Registrado por ${esc(e.porLabel || "—")}</div></div>
+      <button class="btn sm" data-a="fechar" aria-label="Fechar">Fechar</button></div>
+    <div class="dr-b">
+      ${ed ? `<div class="actions"><button class="btn" data-a="editarEv" data-id="${e.id}">Editar</button><button class="btn danger" data-a="apagarEv" data-id="${e.id}">Apagar evento</button></div>` : ""}
+      ${e.treino ? `<dl class="facts"><div><dt>Instrutor responsável</dt><dd>${e.instrutorId && mById(e.instrutorId) ? `<a href="#" data-a="abrir" data-id="${e.instrutorId}" style="color:inherit">${esc(e.instrutor)}</a>` : esc(e.instrutor || "—")}</dd></div><div><dt>Presentes</dt><dd class="num">${pres.length}</dd></div></dl>` : ""}
+      ${e.descricao ? `<div class="sec"><h3>${e.treino ? "Conteúdo / relatório" : "Observações"}</h3><div class="relato">${esc(e.descricao)}</div></div>` : ""}
+      ${e.fotos.length ? `<div class="sec"><h3>Fotos</h3><div class="fotos">${e.fotos.map(f => S.fotoUrl[f] ? `<a href="${esc(S.fotoUrl[f])}" target="_blank" rel="noopener"><img src="${esc(S.fotoUrl[f])}" alt="Foto do evento" loading="lazy"></a>` : `<span class="foto-ph">Carregando…</span>`).join("")}</div></div>` : ""}
+      <div class="sec"><h3>Lista de presença · ${pres.length}</h3><div class="list" style="border:1px solid var(--line);border-radius:6px">${pres.map(p => `<div class="li">${p.m ? chip(p.m.patente) : ""}<span class="grow">${p.m ? `<a href="#" data-a="abrir" data-id="${p.id}" style="color:inherit">${esc(p.m.nome)}</a>${p.m.setorId ? ` <span class="muted" style="font-size:12px">· ${esc(setorNome(p.m.setorId))}</span>` : ""}` : esc(p.nome)}</span></div>`).join("")}</div></div>
+    </div></aside>`;
 }
 
 function vHist(){
@@ -410,39 +503,38 @@ function vAcessos(){
 /* ===== Ficha do militar ===== */
 function renderDrawer(){
   const root = $("#drawer-root");
+  const ev = S.fase === "app" && !S.sel && S.selEv && S.eventos.find(x => x.id === S.selEv);
+  if (ev) { root.innerHTML = drawerEvento(ev); return; }
   const m = S.fase === "app" && S.sel && mById(S.sel);
   if (!m) { root.innerHTML = ""; return; }
   const ex = m.status === "exonerado", act = canActOn(m);
   const pun = S.punicoes.filter(p => p.membroId === m.id), pAt = pun.filter(p => p.ativa), pOld = pun.filter(p => !p.ativa);
-  const sess = S.ponto.filter(p => p.membroId === m.id).slice(0, 5);
+  const evs = S.eventos.filter(e => e.presentes.some(p => p.id === m.id));
   const hist = S.hist.filter(h => h.membroId === m.id).slice(0, 15);
-  const tot = m.totalMs + (m.servico ? Date.now() - m.servico.inicio : 0);
   const b = [];
-  if (!ex && can("ponto")) b.push(m.servico ? `<button class="btn" data-a="saida" data-id="${m.id}">Registrar saída</button>` : `<button class="btn pri" data-a="entrada" data-id="${m.id}">Registrar entrada</button>`);
   if (act && !ex && can("promover")) b.push(`<button class="btn" data-a="promover" data-id="${m.id}">Promover / rebaixar</button>`);
   if (act && !ex && can("setores")) b.push(`<button class="btn" data-a="setorMembro" data-id="${m.id}">Setor e função</button>`);
   if (act && !ex && can("punir")) b.push(`<button class="btn" data-a="punir" data-id="${m.id}">Aplicar punição</button>`);
   if (act && can("editar")) b.push(`<button class="btn" data-a="editar" data-id="${m.id}">Editar dados</button>`);
-  if (act && can("ajustar_ponto")) b.push(`<button class="btn" data-a="horas" data-id="${m.id}">Ajustar horas</button>`);
   if (act && can("exonerar")) b.push(ex ? `<button class="btn" data-a="readmitir" data-id="${m.id}">Readmitir</button>` : `<button class="btn danger" data-a="exonerar" data-id="${m.id}">Exonerar</button>`);
   if (isAdm()) b.push(`<button class="btn danger" data-a="apagarMembro" data-id="${m.id}">Apagar cadastro</button>`);
   root.innerHTML = `<div class="scrim" data-a="fechar"></div>
   <aside class="drawer" role="dialog" aria-label="Ficha de ${esc(m.nome)}">
     <div class="dr-h"><div style="flex:1"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">${chip(m.patente)}<span class="muted" style="font-size:13px">${esc(patName(m.patente))}</span>${m.funcao && m.setorId ? fnChip(m.funcao) : ""}</div>
       <h2>${esc(m.nome)}</h2>
-      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${ex ? `<span class="pill mut">Exonerado</span>` : m.servico ? `<span class="pill ok"><span class="dot pulse"></span>Em serviço há <span data-since="${m.servico.inicio}">${fmtDur(Date.now() - m.servico.inicio)}</span></span>` : `<span class="pill mut">Fora de serviço</span>`}${pAt.length ? `<span class="pill bad">${pAt.length} punição${pAt.length > 1 ? "ões" : ""} ativa${pAt.length > 1 ? "s" : ""}</span>` : ""}</div></div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${ex ? `<span class="pill mut">Exonerado</span>` : `<span class="pill ok">Ativo</span>`}${pAt.length ? `<span class="pill bad">${pAt.length} punição${pAt.length > 1 ? "ões" : ""} ativa${pAt.length > 1 ? "s" : ""}</span>` : ""}</div></div>
       <button class="btn sm" data-a="fechar" aria-label="Fechar ficha">Fechar</button></div>
     <div class="dr-b">
       <dl class="facts"><div><dt>Discord</dt><dd>${esc(m.discord || "—")}</dd></div>
         <div><dt>Setor</dt><dd>${m.setorId && setorById(m.setorId) ? `${esc(setorNome(m.setorId))}${m.funcao ? ` · ${esc(fnNome(m.funcao))}` : ""}` : "Sem setor"}</dd></div>
-        <div><dt>Ingresso</dt><dd class="num">${fmtDate(m.ingresso)}</dd></div><div><dt>Horas totais</dt><dd class="num">${fmtDur(tot)}</dd></div>
+        <div><dt>Ingresso</dt><dd class="num">${fmtDate(m.ingresso)}</dd></div><div><dt>Presenças</dt><dd class="num">${S.presTot[m.id]?.total || 0} no total · ${pres30(m.id)} em 30 dias</dd></div>
         ${(() => { const c = contaDe(m.id); return c ? `<div><dt>Conta no painel</dt><dd>${esc(nivelLabel(cargoDaFicha(m)) )}</dd></div>` : ""; })()}
         ${m.obs ? `<div style="grid-column:1/-1"><dt>Observações</dt><dd style="font-weight:400;white-space:pre-wrap">${esc(m.obs)}</dd></div>` : ""}</dl>
       ${b.length ? `<div class="actions">${b.join("")}</div>` : ""}
-      ${!act ? `<div class="note">Patente igual ou superior à sua: você só pode visualizar e bater ponto deste militar.</div>` : ""}
+      ${!act ? `<div class="note">Patente igual ou superior à sua: você só pode visualizar este militar.</div>` : ""}
       <div class="sec"><h3>Punições ativas</h3>${pAt.length ? `<div class="list" style="border:1px solid var(--line);border-radius:6px">${pAt.map(p => punRow(p, act)).join("")}</div>` : `<div class="muted" style="font-size:14px">Nenhuma.</div>`}
         ${pOld.length ? `<details style="margin-top:8px"><summary class="muted" style="cursor:pointer;font-size:13px">${pOld.length} revogada${pOld.length > 1 ? "s" : ""}</summary><div class="list" style="border:1px solid var(--line);border-radius:6px;margin-top:6px">${pOld.map(p => punRow(p, false)).join("")}</div></details>` : ""}</div>
-      <div class="sec"><h3>Últimos pontos</h3>${sess.length ? `<div class="list" style="border:1px solid var(--line);border-radius:6px">${sess.map(p => `<div class="li"><span class="grow num">${fmtTs(p.inicio)} → ${p.fim ? fmtTs(p.fim) : "em aberto"}</span><span class="num">${fmtDur((p.fim || Date.now()) - p.inicio)}</span></div>`).join("")}</div>` : `<div class="muted" style="font-size:14px">Sem registros.</div>`}</div>
+      <div class="sec"><h3>Últimas presenças</h3>${evs.length ? `<div class="list" style="border:1px solid var(--line);border-radius:6px">${evs.slice(0, 8).map(e => `<div class="li click-li" data-a="abrirEv" data-id="${e.id}" tabindex="0"><span class="tipo-tag ${e.treino ? "treino" : ""}">${esc(e.tipo || "Evento")}</span><span class="grow">${esc(e.titulo || "")}</span><span class="muted num" style="font-size:13px">${fmtTs(e.data)}</span></div>`).join("")}</div>` : `<div class="muted" style="font-size:14px">Nenhuma presença registrada.</div>`}</div>
       <div class="sec"><h3>Histórico</h3><div style="border:1px solid var(--line);border-radius:6px">${feed(hist)}</div></div>
     </div></aside>`;
 }
@@ -450,12 +542,12 @@ function punRow(p, act){ return `<div class="li"><span class="grow"><b>${esc(p.t
 
 /* ===== Modais ===== */
 let modalSubmit = null;
-function openModal(title, body, submitLabel, onSubmit, danger){
+function openModal(title, body, submitLabel, onSubmit, danger, wide){
   modalSubmit = onSubmit;
-  $("#modal-root").innerHTML = `<div class="modal" data-a="mscrim"><form id="mform" novalidate><h2>${esc(title)}</h2>${body}<div class="mfoot"><button type="button" class="btn" data-a="mclose">Cancelar</button><button type="submit" class="btn ${danger ? "danger" : "pri"}">${esc(submitLabel)}</button></div></form></div>`;
+  $("#modal-root").innerHTML = `<div class="modal" data-a="mscrim"><form id="mform" class="${wide ? "wide" : ""}" novalidate><h2>${esc(title)}</h2>${body}<div class="mfoot"><button type="button" class="btn" data-a="mclose">Cancelar</button><button type="submit" class="btn ${danger ? "danger" : "pri"}">${esc(submitLabel)}</button></div></form></div>`;
   const first = $("#mform").querySelector("input,select,textarea"); if (first) first.focus();
 }
-function closeModal(){ $("#modal-root").innerHTML = ""; modalSubmit = null; }
+function closeModal(){ $("#modal-root").innerHTML = ""; modalSubmit = null; if (evForm) { evForm.novas.forEach(f => URL.revokeObjectURL(f.url)); evForm = null; } }
 function patOptions(max, sel, exclude){ let o = ""; for (let i = max; i >= 0; i--) { if (i === exclude) continue; o += `<option value="${i}" ${i === sel ? "selected" : ""}>${esc(PAT[i][0])} (${esc(PAT[i][1])})</option>`; } return o; }
 const motivoField = (ph = "") => `<div class="field"><label for="f-mot">Motivo</label><textarea class="input" id="f-mot" name="motivo" required maxlength="300" placeholder="${esc(ph)}"></textarea></div>`;
 
@@ -594,14 +686,108 @@ function mReadmitir(m){
   openModal(`Readmitir ${m.nome}`, `<div class="field"><label for="f-np">Patente na readmissão</label><select class="input" id="f-np" name="np">${patOptions(mx, Math.min(Number(m.patente), mx))}</select></div>${motivoField()}`,
     "Readmitir", d => d.motivo.trim() ? rpc("readmitir", {p_id:m.id, p_patente:Number(d.np)||0, p_motivo:d.motivo}, "Militar readmitido.") : "Informe o motivo.");
 }
-function mHoras(m){
-  const h = (m.totalMs / 36e5).toFixed(1);
-  openModal(`Ajustar horas de ${m.nome}`, `<div class="field"><label for="f-h">Total de horas</label><input class="input num" type="number" step="0.1" min="0" id="f-h" name="h" value="${h}"><span class="hint">Não inclui o turno em aberto, se houver.</span></div>${motivoField()}`,
-    "Salvar", d => {
-      const v = Number(String(d.h).replace(",", ".")); if (!(v >= 0)) return "Informe um número de horas válido."; if (!d.motivo.trim()) return "Informe o motivo.";
-      return rpc("ajustar_horas", {p_id:m.id, p_horas:v, p_motivo:d.motivo}, "Horas ajustadas.");
-    });
+// Reduz a foto antes de enviar (máx. 1600 px, JPEG) para economizar o armazenamento gratuito
+async function comprimir(file){
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement("canvas"); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  return await new Promise((ok, falha) => c.toBlob(b => b ? ok(b) : falha(new Error("Não foi possível ler a imagem.")), "image/jpeg", 0.82));
 }
+let evForm = null; // { ev, manter:Set(fotos existentes), novas:[File] }
+function mEvento(ev){
+  if (!S.tipos.length) { toast("Cadastre um tipo de evento antes.", "err"); return; }
+  evForm = { ev, manter: new Set(ev?.fotos || []), novas: [] };
+  const presentes = new Set((ev?.presentes || []).map(p => p.id));
+  const cand = S.membros.filter(m => m.status === "ativo" || presentes.has(m.id))
+    .sort((a,b) => b.patente - a.patente || String(a.nome).localeCompare(String(b.nome), "pt-BR"));
+  const tipoIni = ev?.tipoId && tipoById(ev.tipoId) ? ev.tipoId : S.tipos[0].id;
+  const treinoIni = !!tipoById(tipoIni)?.treinamento;
+  openModal(ev ? "Editar evento" : "Registrar evento", `
+    <div class="row2"><div class="field"><label for="e-tipo">Tipo</label><select class="input" id="e-tipo" name="tipo">${S.tipos.map(t => `<option value="${t.id}" ${t.id === tipoIni ? "selected" : ""}>${esc(t.nome)}</option>`).join("")}</select></div>
+    <div class="field"><label for="e-data">Data e horário</label><input class="input" type="datetime-local" id="e-data" name="data" required value="${toLocalInput(ev?.data || Date.now())}"></div></div>
+    <div class="field"><label for="e-tit">Título <span class="muted" style="font-weight:400">(opcional)</span></label><input class="input" id="e-tit" name="titulo" maxlength="80" value="${esc(ev?.titulo || "")}" placeholder="ex.: Arsenal da zona norte, Treino de tiro"></div>
+    <div class="field" id="e-inst-box" ${treinoIni ? "" : "hidden"}><label for="e-inst">Instrutor responsável</label><select class="input" id="e-inst" name="instrutor"><option value="">Selecione…</option>${S.membros.filter(m => m.status === "ativo" || m.id === ev?.instrutorId).sort((a,b) => b.patente - a.patente).map(m => `<option value="${m.id}" ${m.id === ev?.instrutorId ? "selected" : ""}>${esc(mLabel(m))}</option>`).join("")}</select></div>
+    <div class="field"><label for="e-desc" id="e-desc-lbl">${treinoIni ? "Conteúdo / relatório do treinamento" : "Observações"}</label><textarea class="input" id="e-desc" name="descricao" maxlength="4000" placeholder="${treinoIni ? "O que foi treinado, como foi, destaques…" : "opcional"}">${esc(ev?.descricao || "")}</textarea></div>
+    <div class="field"><label>Lista de presença · <span id="e-cont">${presentes.size}</span> marcados</label>
+      <div class="toolbar"><input class="input" id="e-busca" type="search" placeholder="Filtrar nome" style="flex:1 1 140px" aria-label="Filtrar militares">
+        <select class="input" id="e-setor" aria-label="Filtrar por setor"><option value="">Todos os setores</option>${S.setores.map(x => `<option value="${x.id}">${esc(x.nome)}</option>`).join("")}<option value="-">Sem setor</option></select></div>
+      <div class="toolbar"><button type="button" class="btn sm" data-a="marcarVis">Marcar visíveis</button><button type="button" class="btn sm" data-a="desmarcarVis">Desmarcar visíveis</button></div>
+      <div class="checklist" id="e-lista">${cand.map(m => `<label class="ck" data-nome="${esc(m.nome.toLowerCase())}" data-setor="${m.setorId || "-"}"><input type="checkbox" name="presente" value="${m.id}" ${presentes.has(m.id) ? "checked" : ""}> ${chip(m.patente)} <span>${esc(m.nome)}</span>${m.setorId ? `<span class="muted" style="font-size:12px;margin-left:auto">${esc(setorNome(m.setorId))}</span>` : ""}</label>`).join("") || `<div class="muted">Nenhum militar ativo.</div>`}</div></div>
+    <div class="field"><label>Fotos <span class="muted" style="font-weight:400">(até 6)</span></label>
+      <div class="fotos" id="e-fotos"></div>
+      <input type="file" id="e-arq" accept="image/jpeg,image/png,image/webp" multiple class="input"></div>`,
+    ev ? "Salvar alterações" : "Registrar evento", salvarEventoForm, false, true);
+  desenharFotosForm();
+}
+function desenharFotosForm(){
+  const box = $("#e-fotos"); if (!box || !evForm) return;
+  const ex = [...evForm.manter].map(f => `<span class="foto-mini">${S.fotoUrl[f] ? `<img src="${esc(S.fotoUrl[f])}" alt="">` : `<span class="foto-ph">foto</span>`}<button type="button" data-a="rmFotoEx" data-id="${esc(f)}" aria-label="Remover foto">×</button></span>`);
+  const nv = evForm.novas.map((f, i) => `<span class="foto-mini"><img src="${esc(f.url)}" alt=""><button type="button" data-a="rmFotoNova" data-id="${i}" aria-label="Remover foto">×</button></span>`);
+  box.innerHTML = ex.concat(nv).join("");
+  if (evForm.ev) { const falta = [...evForm.manter].filter(f => !S.fotoUrl[f]); if (falta.length) carregarFotos({ id: null, fotos: falta }).then(desenharFotosForm); }
+}
+async function salvarEventoForm(){
+  const form = $("#mform");
+  const tipo = form.tipo.value, data = fromLocalInput(form.data.value);
+  const presentes = [...form.querySelectorAll('input[name="presente"]:checked')].map(i => i.value);
+  const treino = !!tipoById(tipo)?.treinamento;
+  if (!data) return "Informe a data e o horário.";
+  if (data > Date.now() + 864e5) return "A data do evento não pode estar no futuro.";
+  if (treino && !form.instrutor.value) return "Informe o instrutor responsável.";
+  if (!presentes.length) return "Marque pelo menos um militar presente.";
+  if (evForm.manter.size + evForm.novas.length > 6) return "Máximo de 6 fotos por evento.";
+  const id = evForm.ev?.id || crypto.randomUUID();
+  const btn = form.querySelector('button[type="submit"]');
+  const enviadas = [];
+  try {
+    for (let i = 0; i < evForm.novas.length; i++) {
+      btn.textContent = `Enviando foto ${i + 1} de ${evForm.novas.length}…`;
+      const blob = await comprimir(evForm.novas[i].file);
+      const path = `${id}/${Date.now()}-${i}.jpg`;
+      const { error } = await sb.storage.from("eventos").upload(path, blob, { contentType: "image/jpeg" });
+      if (error) throw new Error("Falha ao enviar foto: " + error.message);
+      enviadas.push(path);
+    }
+  } catch (e) {
+    if (enviadas.length) sb.storage.from("eventos").remove(enviadas);
+    btn.textContent = evForm.ev ? "Salvar alterações" : "Registrar evento";
+    return e.message || "Falha ao enviar as fotos.";
+  }
+  btn.textContent = "Salvando…";
+  const removidas = (evForm.ev?.fotos || []).filter(f => !evForm.manter.has(f));
+  const ok = await rpc("salvar_evento", { p_id:id, p_tipo:tipo, p_titulo:form.titulo.value, p_data:new Date(data).toISOString(),
+    p_instrutor: treino ? (form.instrutor.value || null) : null, p_descricao:form.descricao.value, p_presentes:presentes, p_fotos:[...evForm.manter, ...enviadas] },
+    evForm.ev ? "Evento atualizado." : "Evento registrado.");
+  if (!ok) { if (enviadas.length) sb.storage.from("eventos").remove(enviadas); btn.textContent = evForm.ev ? "Salvar alterações" : "Registrar evento"; return false; }
+  if (removidas.length) sb.storage.from("eventos").remove(removidas);
+  evForm.novas.forEach(f => URL.revokeObjectURL(f.url));
+  if (!evForm.ev) { S.selEv = id; S.sel = null; setTimeout(renderDrawer, 0); }
+  evForm = null;
+  return true;
+}
+function filtrarChecklist(){
+  const qq = ($("#e-busca")?.value || "").trim().toLowerCase(), st = $("#e-setor")?.value || "";
+  document.querySelectorAll("#e-lista .ck").forEach(el => { el.hidden = !((!qq || el.dataset.nome.includes(qq)) && (!st || el.dataset.setor === st)); });
+}
+function contarChecklist(){ const c = $("#e-cont"); if (c) c.textContent = document.querySelectorAll('#e-lista input[name="presente"]:checked').length; }
+function mTipos(){
+  openModal("Tipos de evento", `
+    <div class="note">Tipos marcados como <b>treinamento</b> pedem instrutor e relatório. Apagar um tipo não apaga os eventos antigos, que guardam o nome.</div>
+    <div class="list" style="border:1px solid var(--line);border-radius:6px">${S.tipos.map(t => `<div class="li"><input class="input" id="tn-${t.id}" value="${esc(t.nome)}" maxlength="40" style="flex:1 1 140px" aria-label="Nome do tipo">
+      <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="tt-${t.id}" ${t.treinamento ? "checked" : ""}> treinamento</label>
+      <button type="button" class="btn sm" data-a="tipoSalvar" data-id="${t.id}">Salvar</button><button type="button" class="btn sm danger" data-a="tipoApagar" data-id="${t.id}">Apagar</button></div>`).join("")}</div>
+    <div class="field"><label for="tn-novo">Novo tipo</label><div class="toolbar"><input class="input" id="tn-novo" maxlength="40" placeholder="ex.: Patrulha, Escolta, Operação" style="flex:1 1 160px">
+      <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="tt-novo"> treinamento</label>
+      <button type="button" class="btn sm pri" data-a="tipoNovo">Adicionar</button></div></div>`,
+    "Concluído", () => true);
+}
+async function acaoTipo(fn, args, ok){
+  const { error } = await sb.rpc(fn, args);
+  if (error) { toast(error.message, "err"); return; }
+  toast(ok); await carregar(["tipos_evento"]); render(); if ($("#modal-root").innerHTML) mTipos();
+}
+
 function mTrocarSenha(){
   openModal("Trocar senha", `
     <div class="field"><label for="f-s1">Nova senha</label><input class="input" type="password" id="f-s1" name="s1" minlength="6" autocomplete="new-password" required></div>
@@ -643,9 +829,9 @@ document.addEventListener("click", e => {
     case "sair": sb.auth.signOut(); break;
     case "verificar": recarregarMeuCargo(); break;
     case "assumirAdm": (async () => { const { error } = await sb.rpc("assumir_adm"); if (error) toast(error.message, "err"); else { toast("Você agora é o ADM Geral."); recarregarMeuCargo(); } })(); break;
-    case "tab": S.tab = id; S.sel = null; if (id !== "acessos") S.permDraft = null; render(); window.scrollTo(0, 0); break;
+    case "tab": S.tab = id; S.sel = null; S.selEv = null; if (id !== "acessos") S.permDraft = null; render(); window.scrollTo(0, 0); break;
     case "abrir": S.sel = id; renderDrawer(); break;
-    case "fechar": S.sel = null; renderDrawer(); break;
+    case "fechar": if (S.sel && S.selEv) S.sel = null; else { S.sel = null; S.selEv = null; } renderDrawer(); break;
     case "novo": if (can("cadastrar")) mNovo(); break;
     case "editar": m && mEditar(m); break;
     case "promover": m && mPromover(m); break;
@@ -654,12 +840,30 @@ document.addEventListener("click", e => {
     case "exonerar": m && mExonerar(m); break;
     case "readmitir": m && mReadmitir(m); break;
     case "horas": m && mHoras(m); break;
-    case "apagarMembro": m && mConfirm("Apagar cadastro", `Apagar de vez o cadastro de <b>${esc(mLabel(m))}</b>? O histórico continua, mas a ficha, as punições e o vínculo do ponto somem. Para tirar alguém do efetivo, prefira Exonerar.`, "Apagar", async () => { const ok = await rpc("apagar_membro", {p_id:m.id}, "Cadastro apagado."); if (ok) S.sel = null; return ok; }); break;
-    case "entrada": if (m && !m.servico) rpc("ponto_entrada", {p_id:m.id}, "Entrada registrada."); break;
-    case "entradaSel": { const v = $("#pontoSel")?.value; if (!v) { toast("Selecione um militar.", "err"); break; } rpc("ponto_entrada", {p_id:v}, "Entrada registrada."); break; }
-    case "saida": if (m && m.servico) rpc("ponto_saida", {p_id:m.id}, "Saída registrada."); break;
-    case "apagarPonto": { const p = S.ponto.find(x => x.id === id); if (!p) break; const mm = mById(p.membroId);
-      mConfirm("Apagar registro de ponto", `Apagar o turno de ${fmtTs(p.inicio)} (${fmtDur(p.fim - p.inicio)})${mm ? ` de <b>${esc(mLabel(mm))}</b>? As horas desse turno serão descontadas do total.` : "?"}`, "Apagar", () => rpc("apagar_ponto", {p_ponto:p.id}, "Registro apagado.")); break; }
+    case "apagarMembro": m && mConfirm("Apagar cadastro", `Apagar de vez o cadastro de <b>${esc(mLabel(m))}</b>? O histórico continua, mas a ficha, as punições e as presenças dele somem. Para tirar alguém do efetivo, prefira Exonerar.`, "Apagar", async () => { const ok = await rpc("apagar_membro", {p_id:m.id}, "Cadastro apagado."); if (ok) S.sel = null; return ok; }); break;
+    case "abrirEv": S.selEv = id; S.sel = null; renderDrawer(); break;
+    case "novoEv": if (S.podeRegistrar) mEvento(null); break;
+    case "editarEv": { const ev = S.eventos.find(x => x.id === id); ev && mEvento(ev); break; }
+    case "apagarEv": { const ev = S.eventos.find(x => x.id === id); if (!ev) break;
+      mConfirm("Apagar evento", `Apagar <b>${esc(ev.tipo)}${ev.titulo ? " · " + esc(ev.titulo) : ""}</b> de ${fmtTs(ev.data)}? A lista de presença (${ev.presentes.length}) e as fotos também serão apagadas.`, "Apagar", async () => {
+        const { data, error } = await sb.rpc("apagar_evento", { p_id: ev.id });
+        if (error) return error.message;
+        if (data && data.length) sb.storage.from("eventos").remove(data);
+        toast("Evento apagado."); S.selEv = null; await carregar(["eventos","presencas","historico"]); render(); return true; }); break; }
+    case "periodo": { const agora = new Date();
+      if (id === "limpar") { S.fDe = ""; S.fAte = ""; S.fTipo = ""; S.qEv = ""; }
+      else { const ini = new Date(agora); if (id === "hoje") ini.setHours(0, 0, 0, 0); else { ini.setDate(ini.getDate() - Number(id)); ini.setHours(0, 0, 0, 0); }
+        S.fDe = toLocalInput(ini.getTime()); S.fAte = ""; }
+      render(); break; }
+    case "copiarRel": { const txt = textoRelatorio();
+      navigator.clipboard.writeText(txt).then(() => toast("Relatório copiado. Cole no Discord ou onde quiser."), () => toast("Não foi possível copiar automaticamente.", "err")); break; }
+    case "tiposEv": mTipos(); break;
+    case "tipoSalvar": acaoTipo("editar_tipo_evento", { p_id:id, p_nome:$("#tn-" + id).value, p_treinamento:$("#tt-" + id).checked }, "Tipo salvo."); break;
+    case "tipoApagar": { const t = tipoById(id); if (t) acaoTipo("apagar_tipo_evento", { p_id:id }, `Tipo ${t.nome} apagado.`); break; }
+    case "tipoNovo": acaoTipo("criar_tipo_evento", { p_nome:$("#tn-novo").value, p_treinamento:$("#tt-novo").checked }, "Tipo criado."); break;
+    case "marcarVis": case "desmarcarVis": document.querySelectorAll("#e-lista .ck").forEach(el => { if (!el.hidden) el.querySelector("input").checked = a === "marcarVis"; }); contarChecklist(); break;
+    case "rmFotoEx": evForm?.manter.delete(id); desenharFotosForm(); break;
+    case "rmFotoNova": if (evForm) { const f = evForm.novas.splice(Number(id), 1)[0]; if (f) URL.revokeObjectURL(f.url); desenharFotosForm(); } break;
     case "liberar": { const p = S.perfis.find(x => x.user_id === id); p && mLiberar(p); break; }
     case "rmAcesso": { const s2 = S.staff.find(x => x.user_id === id); const mm = s2?.membro_id && mById(s2.membro_id);
       s2 && mConfirm("Remover acesso", `Remover o acesso ao painel de <b>${esc(mm ? mLabel(mm) : s2.nome)}</b>? A ficha continua no efetivo; só o login deixa de funcionar até ser liberado de novo.`, "Remover acesso",
@@ -691,11 +895,28 @@ document.addEventListener("submit", async e => {
   if (typeof r === "string") { btn.disabled = false; toast(r, "err"); return; }
   if (r) closeModal(); else btn.disabled = false;
 });
-document.addEventListener("input", e => { if (e.target.id === "q") { S.q = e.target.value; render(); } });
+document.addEventListener("input", e => {
+  if (e.target.id === "q") { S.q = e.target.value; render(); }
+  else if (e.target.id === "qEv") { S.qEv = e.target.value; render(); }
+  else if (e.target.id === "e-busca") filtrarChecklist();
+});
 document.addEventListener("change", e => {
   const t = e.target;
   if (t.id === "fPat") { S.fPat = t.value; render(); }
   else if (t.id === "fSetor") { S.fSetor = t.value; render(); }
+  else if (t.id === "fTipo") { S.fTipo = t.value; render(); }
+  else if (t.id === "fDe") { S.fDe = t.value; render(); }
+  else if (t.id === "fAte") { S.fAte = t.value; render(); }
+  else if (t.id === "e-setor") filtrarChecklist();
+  else if (t.name === "presente") contarChecklist();
+  else if (t.id === "e-tipo") { const tr = !!tipoById(t.value)?.treinamento; $("#e-inst-box").hidden = !tr; $("#e-desc-lbl").textContent = tr ? "Conteúdo / relatório do treinamento" : "Observações"; }
+  else if (t.id === "e-arq" && evForm) {
+    const novos = [...t.files].filter(f => /^image\//.test(f.type));
+    const livres = 6 - evForm.manter.size - evForm.novas.length;
+    if (novos.length > livres) toast(`Máximo de 6 fotos. ${livres > 0 ? "Só as " + livres + " primeiras foram adicionadas." : ""}`, "err");
+    novos.slice(0, Math.max(0, livres)).forEach(f => evForm.novas.push({ file: f, url: URL.createObjectURL(f) }));
+    t.value = ""; desenharFotosForm();
+  }
   else if (t.name === "modo" && t.type === "radio") { $("#lib-nova").hidden = t.value !== "nova"; $("#lib-exist").hidden = t.value !== "existente"; }
   else if ((t.id === "f-set" || t.id === "f-fn") && $("#fn-aviso")) atualizarAvisoFuncao(modalMembro);
   else if (t.id === "fStatus") { S.fStatus = t.value; render(); }
@@ -704,8 +925,9 @@ document.addEventListener("change", e => {
   else if (t.dataset.a === "permMax") S.permDraft[t.dataset.c].max_patente = Number(t.value);
 });
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") { if ($("#modal-root").innerHTML) closeModal(); else if (S.sel) { S.sel = null; renderDrawer(); } }
+  if (e.key === "Escape") { if ($("#modal-root").innerHTML) closeModal(); else if (S.sel || S.selEv) { if (S.sel && S.selEv) S.sel = null; else { S.sel = null; S.selEv = null; } renderDrawer(); } }
   if (e.key === "Enter" && e.target.matches("tr[data-a='abrir']")) { S.sel = e.target.dataset.id; renderDrawer(); }
+  if (e.key === "Enter" && e.target.matches("[data-a='abrirEv']")) { S.selEv = e.target.dataset.id; S.sel = null; renderDrawer(); }
 });
 
 boot().catch(e => { S.fase = "erro"; S.err = "Não foi possível iniciar o painel: " + (e.message || e); render(); });

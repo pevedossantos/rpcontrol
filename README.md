@@ -5,7 +5,7 @@ Painel web de controle de efetivo da base militar **Exército de Solano** (One S
 - **Efetivo:** cadastro com nome no RP, Discord (obrigatório), patente, setor, ingresso e observações
 - **Setores:** Sul, Norte, Centro, Leste e Especiais (editáveis), com as funções 1 CMD, 2 CMD, 1 AUX e 2 AUX
 - **Promoções e punições:** histórico completo, com motivo e autor
-- **Bate-ponto:** entrada e saída de serviço, horas acumuladas, ranking semanal
+- **Eventos e lista de presença:** Roubo do Arsenal, Treinamento e outros tipos; quem participou de cada evento, relatório de treinamento com instrutor e fotos, filtros por data e horário
 - **Acessos pela patente:** login com o nome do jogo e senha; cada conta é ligada a uma ficha e a patente define o que pode fazer
 - **Tempo real:** o que um oficial altera aparece na tela dos outros na hora
 
@@ -80,10 +80,10 @@ Cada conta é ligada a uma ficha do efetivo, e **a patente da ficha define o ace
 | — | ADM Geral | Tudo, sem limites; gerencia contas. Não entra na contagem do efetivo |
 | Federal | Federal | Tudo, concede até GEN ADJ |
 | General Adjunto | General Adjunto | Tudo, concede até CEL GEN |
-| Coronel General | Coronel General | Sem revogar punição e ajustar ponto, concede até TEN GEN |
-| Tenente General | Tenente General | Sem revogar, exonerar, ajustar ponto e setores, concede até MAJ GEN |
-| Major General | Major General | Sem editar, revogar, exonerar, ajustar ponto e setores, concede até CEL |
-| Recruta a Coronel | Visualização | Vê o painel, não altera nada |
+| Coronel General | Coronel General | Sem revogar punição e ajustar eventos de outros, concede até TEN GEN |
+| Tenente General | Tenente General | Sem revogar, exonerar, ajustar eventos de outros e setores, concede até MAJ GEN |
+| Major General | Major General | Sem editar, revogar, exonerar, ajustar eventos de outros e setores, concede até CEL |
+| Recruta a Coronel | Visualização | Vê o painel, não altera nada (exceto quem tem função no setor, que registra eventos) |
 
 - Os limites dos generais são editáveis pelo ADM Geral na aba **Acessos**.
 - Promoção, rebaixamento ou exoneração mudam o acesso na hora. Ficha exonerada = acesso suspenso.
@@ -96,6 +96,21 @@ Cada conta é ligada a uma ficha do efetivo, e **a patente da ficha define o ace
 - Cada função é única no setor: ao atribuir a outro militar, quem ocupava perde a função e continua no setor.
 - Um militar fica em um setor por vez. Exonerado sai do setor automaticamente.
 - Quem pode mexer: ADM Geral e os cargos com **Gerenciar setores e funções** ligado.
+
+## Eventos e lista de presença
+
+- Aba **Eventos**: cada evento tem tipo, data e horário, título opcional, observações e a lista de quem participou.
+- Tipos marcados como **treinamento** viram relatório de treinamento: pedem instrutor responsável e conteúdo.
+- Até 6 fotos por evento (reduzidas automaticamente antes do envio). Só quem tem acesso ao painel vê as fotos.
+- Filtros por tipo, data e horário (De / Até), busca por participante e atalhos Hoje / 7 dias / 30 dias.
+  O botão **Copiar relatório** gera um texto pronto para colar no Discord com os eventos e a presença por militar.
+- Quem registra: cargos com **Registrar eventos e lista de presença** ligado e quem tem função num setor (**1 CMD, 2 CMD, 1 AUX ou 2 AUX**).
+  Quem registrou edita o próprio evento; cargos com **Editar e apagar eventos de outros** mexem em qualquer um e nos tipos.
+- O antigo bate-ponto saiu da tela. Os registros antigos continuam guardados no banco.
+
+**Fotos não carregam ou dão erro ao enviar?** O script cria sozinho a pasta privada `eventos` no Storage do Supabase.
+Se aparecer um aviso sobre "armazenamento" ao rodar o script, crie em **Storage → New bucket**, nome `eventos`, **privado**,
+e rode o script de novo para aplicar as regras de acesso.
 
 ### Como a segurança funciona
 

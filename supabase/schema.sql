@@ -166,6 +166,59 @@ create table if not exists public.historico (
 );
 create index if not exists historico_em_idx on public.historico (em desc);
 
+-- Tipos de evento (editáveis). "treinamento" mostra os campos de relatório (instrutor e conteúdo).
+create table if not exists public.tipos_evento (
+  id          uuid primary key default gen_random_uuid(),
+  nome        text not null check (length(nome) between 1 and 40),
+  treinamento boolean not null default false,
+  ordem       int not null default 0,
+  criado_em   timestamptz not null default now()
+);
+create unique index if not exists tipos_evento_nome_uk on public.tipos_evento (lower(trim(nome)));
+insert into public.tipos_evento (nome, treinamento, ordem)
+select n, t, o from (values ('Roubo do Arsenal', false, 1), ('Treinamento', true, 2)) v(n,t,o)
+where not exists (select 1 from public.tipos_evento);
+
+-- Eventos (lista de presença e relatórios de treinamento)
+create table if not exists public.eventos (
+  id               uuid primary key default gen_random_uuid(),
+  tipo_id          uuid references public.tipos_evento on delete set null,
+  tipo_nome        text not null default '',
+  treinamento      boolean not null default false,
+  titulo           text not null default '',
+  data_hora        timestamptz not null,
+  instrutor_id     uuid references public.membros on delete set null,
+  instrutor_nome   text not null default '',
+  descricao        text not null default '',
+  fotos            text[] not null default '{}',
+  criado_por       uuid,
+  criado_por_label text,
+  criado_em        timestamptz not null default now(),
+  atualizado_em    timestamptz not null default now()
+);
+create index if not exists eventos_data_idx on public.eventos (data_hora desc);
+
+-- Quem esteve presente em cada evento
+create table if not exists public.presencas (
+  evento_id   uuid not null references public.eventos on delete cascade,
+  membro_id   uuid not null references public.membros on delete cascade,
+  membro_nome text not null default '',
+  primary key (evento_id, membro_id)
+);
+create index if not exists presencas_membro_idx on public.presencas (membro_id);
+
+-- Permissões de eventos (substituem as de ponto na tela)
+do $$ begin
+  if not exists (select 1 from information_schema.columns where table_schema='public' and table_name='cargo_perms' and column_name='presenca') then
+    alter table public.cargo_perms add column presenca boolean not null default false;
+    update public.cargo_perms set presenca = true;
+  end if;
+  if not exists (select 1 from information_schema.columns where table_schema='public' and table_name='cargo_perms' and column_name='ajustar_presenca') then
+    alter table public.cargo_perms add column ajustar_presenca boolean not null default false;
+    update public.cargo_perms set ajustar_presenca = true where cargo in ('federal','genadj');
+  end if;
+end $$;
+
 -- ---------------------------------------------------------------------
 -- Migração das contas: o cargo passa a vir da patente da ficha
 -- ---------------------------------------------------------------------
@@ -272,6 +325,7 @@ begin
     when 'revogar'   then r.revogar    when 'exonerar' then r.exonerar
     when 'ponto'     then r.ponto      when 'ajustar_ponto' then r.ajustar_ponto
     when 'setores'   then r.setores
+    when 'presenca'  then r.presenca   when 'ajustar_presenca' then r.ajustar_presenca
     else false end;
 end $$;
 
@@ -632,6 +686,154 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------
+-- Eventos e lista de presença
+-- ---------------------------------------------------------------------
+
+-- Pode registrar eventos: cargos com "presenca" na tabela de limites, ou quem tem função em algum setor (1 CMD, 2 CMD, 1 AUX, 2 AUX)
+create or replace function public.pode_registrar() returns boolean
+language sql stable security definer set search_path = public as $$
+  select tem_perm('presenca') or exists (
+    select 1 from staff s join membros m on m.id = s.membro_id
+    where s.user_id = auth.uid() and m.status = 'ativo' and m.setor_id is not null and m.funcao in ('1CMD','2CMD','1AUX','2AUX'))
+$$;
+
+-- Pode editar/apagar eventos de outros e gerenciar tipos de evento
+create or replace function public.pode_ajustar_eventos() returns boolean
+language sql stable security definer set search_path = public as $$
+  select tem_perm('ajustar_presenca')
+$$;
+
+create or replace function public._pode_editar_evento(e eventos) returns void
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if pode_ajustar_eventos() then return; end if;
+  if e.criado_por = auth.uid() and pode_registrar() then return; end if;
+  raise exception 'Só quem registrou o evento (ou um cargo com permissão de ajustar eventos) pode alterar.';
+end $$;
+
+-- Cria (p_id novo) ou atualiza (p_id existente) um evento com a lista completa de presentes.
+-- O site gera o p_id antes para poder enviar as fotos para a pasta do evento.
+create or replace function public.salvar_evento(p_id uuid, p_tipo uuid, p_titulo text, p_data timestamptz,
+                                                p_instrutor uuid, p_descricao text, p_presentes uuid[], p_fotos text[])
+returns uuid language plpgsql security definer set search_path = public as $$
+declare e eventos; t tipos_evento; novo boolean; inst membros; qtd int; ausentes int; f text;
+begin
+  if p_id is null then raise exception 'Evento sem identificador.'; end if;
+  select * into e from eventos where id = p_id for update;
+  novo := not found;
+  if novo then
+    if not pode_registrar() then raise exception 'Você não tem permissão para registrar eventos.'; end if;
+  else
+    perform _pode_editar_evento(e);
+  end if;
+
+  select * into t from tipos_evento where id = p_tipo;
+  if not found then raise exception 'Escolha o tipo do evento.'; end if;
+  if p_data is null then raise exception 'Informe a data e o horário do evento.'; end if;
+  if p_data > now() + interval '1 day' then raise exception 'A data do evento não pode estar no futuro.'; end if;
+  if length(coalesce(p_titulo, '')) > 80 then raise exception 'O título pode ter no máximo 80 caracteres.'; end if;
+  if length(coalesce(p_descricao, '')) > 4000 then raise exception 'O relatório pode ter no máximo 4000 caracteres.'; end if;
+
+  if p_instrutor is not null then
+    select * into inst from membros where id = p_instrutor;
+    if not found then raise exception 'Instrutor não encontrado.'; end if;
+  elsif t.treinamento then
+    raise exception 'Informe o instrutor responsável pelo treinamento.';
+  end if;
+
+  qtd := coalesce(array_length(p_presentes, 1), 0);
+  if qtd = 0 then raise exception 'Marque pelo menos um militar presente.'; end if;
+  if qtd > 300 then raise exception 'Máximo de 300 presentes por evento.'; end if;
+  select count(*) into ausentes from unnest(p_presentes) x(id)
+   where not exists (select 1 from membros m where m.id = x.id
+                     and (m.status = 'ativo' or exists (select 1 from presencas pr where pr.evento_id = p_id and pr.membro_id = m.id)));
+  if ausentes > 0 then raise exception 'Há militares na lista que não existem ou estão exonerados.'; end if;
+
+  if coalesce(array_length(p_fotos, 1), 0) > 6 then raise exception 'Máximo de 6 fotos por evento.'; end if;
+  foreach f in array coalesce(p_fotos, '{}') loop
+    if f not like p_id::text || '/%' then raise exception 'Foto inválida.'; end if;
+  end loop;
+
+  if novo then
+    insert into eventos (id, tipo_id, tipo_nome, treinamento, titulo, data_hora, instrutor_id, instrutor_nome,
+                         descricao, fotos, criado_por, criado_por_label)
+    values (p_id, t.id, t.nome, t.treinamento, trim(coalesce(p_titulo, '')), p_data, p_instrutor,
+            case when inst.id is null then '' else patente_sigla(inst.patente) || ' ' || inst.nome end,
+            trim(coalesce(p_descricao, '')), coalesce(p_fotos, '{}'), auth.uid(), meu_rotulo());
+  else
+    update eventos set tipo_id = t.id, tipo_nome = t.nome, treinamento = t.treinamento, titulo = trim(coalesce(p_titulo, '')),
+           data_hora = p_data, instrutor_id = p_instrutor,
+           instrutor_nome = case when inst.id is null then '' else patente_sigla(inst.patente) || ' ' || inst.nome end,
+           descricao = trim(coalesce(p_descricao, '')), fotos = coalesce(p_fotos, '{}'), atualizado_em = now()
+     where id = p_id;
+  end if;
+
+  delete from presencas where evento_id = p_id and membro_id <> all (p_presentes);
+  insert into presencas (evento_id, membro_id, membro_nome)
+  select p_id, m.id, patente_sigla(m.patente) || ' ' || m.nome from membros m where m.id = any (p_presentes)
+  on conflict (evento_id, membro_id) do nothing;
+
+  perform _log('evento', null::membros,
+    t.nome || coalesce(nullif(' · ' || trim(coalesce(p_titulo, '')), ' · '), '') || ' de ' ||
+    to_char(p_data at time zone 'America/Sao_Paulo', 'DD/MM HH24:MI') ||
+    case when novo then ' registrado' else ' alterado' end || ' com ' || qtd || ' presente' || case when qtd > 1 then 's' else '' end, '');
+  return p_id;
+end $$;
+
+create or replace function public.apagar_evento(p_id uuid)
+returns text[] language plpgsql security definer set search_path = public as $$
+declare e eventos;
+begin
+  select * into e from eventos where id = p_id for update;
+  if not found then raise exception 'Evento não encontrado.'; end if;
+  perform _pode_editar_evento(e);
+  delete from eventos where id = p_id;
+  perform _log('evento', null::membros, e.tipo_nome || coalesce(nullif(' · ' || e.titulo, ' · '), '') || ' de ' ||
+               to_char(e.data_hora at time zone 'America/Sao_Paulo', 'DD/MM HH24:MI') || ' apagado', '');
+  return e.fotos;  -- o site apaga as fotos do armazenamento
+end $$;
+
+-- Total de presenças por militar (todas as datas)
+create or replace function public.presencas_por_membro()
+returns table (membro_id uuid, total bigint, ultima timestamptz)
+language sql stable security definer set search_path = public as $$
+  select p.membro_id, count(*), max(e.data_hora)
+  from presencas p join eventos e on e.id = p.evento_id
+  where is_staff()
+  group by p.membro_id
+$$;
+
+create or replace function public.criar_tipo_evento(p_nome text, p_treinamento boolean)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare n text := trim(coalesce(p_nome, '')); tid uuid;
+begin
+  if not pode_ajustar_eventos() then raise exception 'Seu cargo não pode gerenciar tipos de evento.'; end if;
+  if n = '' or length(n) > 40 then raise exception 'Informe um nome com até 40 caracteres.'; end if;
+  insert into tipos_evento (nome, treinamento, ordem)
+  values (n, coalesce(p_treinamento, false), coalesce((select max(ordem) from tipos_evento), 0) + 1) returning id into tid;
+  return tid;
+exception when unique_violation then raise exception 'Já existe um tipo de evento com esse nome.';
+end $$;
+
+create or replace function public.editar_tipo_evento(p_id uuid, p_nome text, p_treinamento boolean)
+returns void language plpgsql security definer set search_path = public as $$
+declare n text := trim(coalesce(p_nome, ''));
+begin
+  if not pode_ajustar_eventos() then raise exception 'Seu cargo não pode gerenciar tipos de evento.'; end if;
+  if n = '' or length(n) > 40 then raise exception 'Informe um nome com até 40 caracteres.'; end if;
+  update tipos_evento set nome = n, treinamento = coalesce(p_treinamento, treinamento) where id = p_id;
+  if not found then raise exception 'Tipo de evento não encontrado.'; end if;
+exception when unique_violation then raise exception 'Já existe um tipo de evento com esse nome.';
+end $$;
+
+create or replace function public.apagar_tipo_evento(p_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not pode_ajustar_eventos() then raise exception 'Seu cargo não pode gerenciar tipos de evento.'; end if;
+  delete from tipos_evento where id = p_id;  -- eventos antigos guardam o nome do tipo
+end $$;
+
+-- ---------------------------------------------------------------------
 -- Contas e acessos (ADM Geral)
 -- ---------------------------------------------------------------------
 
@@ -713,6 +915,8 @@ begin
       ponto         = coalesce((v->>'ponto')::boolean, ponto),
       ajustar_ponto = coalesce((v->>'ajustar_ponto')::boolean, ajustar_ponto),
       setores       = coalesce((v->>'setores')::boolean, setores),
+      presenca      = coalesce((v->>'presenca')::boolean, presenca),
+      ajustar_presenca = coalesce((v->>'ajustar_presenca')::boolean, ajustar_presenca),
       max_patente   = least(greatest(coalesce((v->>'max_patente')::int, max_patente), 0), nivel_cargo(k) - 1)
     where cargo = k;
   end loop;
@@ -764,6 +968,9 @@ alter table public.membros     enable row level security;
 alter table public.punicoes    enable row level security;
 alter table public.ponto       enable row level security;
 alter table public.historico   enable row level security;
+alter table public.tipos_evento enable row level security;
+alter table public.eventos      enable row level security;
+alter table public.presencas    enable row level security;
 
 drop policy if exists leitura on public.perfis;
 create policy leitura on public.perfis      for select to authenticated using (user_id = auth.uid() or is_adm());
@@ -781,12 +988,20 @@ drop policy if exists leitura on public.ponto;
 create policy leitura on public.ponto       for select to authenticated using (is_staff());
 drop policy if exists leitura on public.historico;
 create policy leitura on public.historico   for select to authenticated using (is_staff());
+drop policy if exists leitura on public.tipos_evento;
+create policy leitura on public.tipos_evento for select to authenticated using (is_staff());
+drop policy if exists leitura on public.eventos;
+create policy leitura on public.eventos      for select to authenticated using (is_staff());
+drop policy if exists leitura on public.presencas;
+create policy leitura on public.presencas    for select to authenticated using (is_staff());
 
 revoke insert, update, delete, truncate on
-  public.perfis, public.staff, public.cargo_perms, public.setores, public.membros, public.punicoes, public.ponto, public.historico
+  public.perfis, public.staff, public.cargo_perms, public.setores, public.membros, public.punicoes, public.ponto, public.historico,
+  public.tipos_evento, public.eventos, public.presencas
   from anon, authenticated;
 revoke select on
-  public.perfis, public.staff, public.cargo_perms, public.setores, public.membros, public.punicoes, public.ponto, public.historico
+  public.perfis, public.staff, public.cargo_perms, public.setores, public.membros, public.punicoes, public.ponto, public.historico,
+  public.tipos_evento, public.eventos, public.presencas
   from anon;
 
 -- Funções: só usuários logados chamam; as internas (_) ninguém chama de fora
@@ -802,6 +1017,7 @@ revoke execute on function public._validar_discord(text, uuid)     from authenti
 revoke execute on function public._validar_setor(uuid)             from authenticated;
 revoke execute on function public._fechar_ponto(membros)           from authenticated;
 revoke execute on function public._sync_perfil()                   from authenticated;
+revoke execute on function public._pode_editar_evento(eventos)     from authenticated;
 
 -- ---------------------------------------------------------------------
 -- Tempo real: o painel atualiza sozinho quando alguém altera algo
@@ -809,10 +1025,35 @@ revoke execute on function public._sync_perfil()                   from authenti
 do $$
 declare t text;
 begin
-  foreach t in array array['perfis','staff','cargo_perms','setores','membros','punicoes','ponto','historico'] loop
+  foreach t in array array['perfis','staff','cargo_perms','setores','membros','punicoes','ponto','historico','tipos_evento','eventos','presencas'] loop
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
       execute format('alter publication supabase_realtime add table public.%I', t);
     end if;
   end loop;
+end $$;
+
+-- ---------------------------------------------------------------------
+-- Fotos dos eventos (Supabase Storage, pasta privada "eventos")
+-- Só quem tem acesso ao painel vê; só quem registra eventos envia.
+-- ---------------------------------------------------------------------
+do $$
+begin
+  insert into storage.buckets (id, name, public) values ('eventos', 'eventos', false) on conflict (id) do nothing;
+  begin
+    update storage.buckets set file_size_limit = 5242880,
+           allowed_mime_types = array['image/jpeg','image/png','image/webp'] where id = 'eventos';
+  exception when others then null;
+  end;
+  execute 'drop policy if exists "eventos_fotos_ler" on storage.objects';
+  execute $p$create policy "eventos_fotos_ler" on storage.objects for select to authenticated
+             using (bucket_id = 'eventos' and public.is_staff())$p$;
+  execute 'drop policy if exists "eventos_fotos_enviar" on storage.objects';
+  execute $p$create policy "eventos_fotos_enviar" on storage.objects for insert to authenticated
+             with check (bucket_id = 'eventos' and public.pode_registrar())$p$;
+  execute 'drop policy if exists "eventos_fotos_apagar" on storage.objects';
+  execute $p$create policy "eventos_fotos_apagar" on storage.objects for delete to authenticated
+             using (bucket_id = 'eventos' and (public.pode_ajustar_eventos() or owner = auth.uid()))$p$;
+exception when others then
+  raise notice 'Fotos: não foi possível configurar o armazenamento automaticamente (%). Veja o README.', sqlerrm;
 end $$;

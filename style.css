@@ -178,3 +178,23 @@ tr.dim td{opacity:.6}
 .cmd-line{font-size:12px;margin-top:3px}
 input[type=radio]{accent-color:var(--accent);width:16px;height:16px}
 .slot .grow{flex:1;min-width:0}
+
+/* Eventos e lista de presença */
+.tipo-tag{display:inline-flex;align-items:center;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;white-space:nowrap;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent)}
+.tipo-tag.treino{background:var(--gold-soft);color:var(--gold);border-color:var(--gold)}
+.ev-grid{grid-template-columns:1.6fr 1fr}
+@media (max-width:860px){.ev-grid{grid-template-columns:1fr}}
+label.dt{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
+.click-li{cursor:pointer}
+.click-li:hover,.click-li:focus{background:var(--surface-2)}
+.relato{white-space:pre-wrap;font-size:14px;background:var(--surface-2);border-radius:6px;padding:10px 12px;line-height:1.55}
+.fotos{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
+.fotos img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:6px;border:1px solid var(--line);display:block}
+.foto-ph{display:flex;align-items:center;justify-content:center;aspect-ratio:4/3;border-radius:6px;background:var(--surface-2);color:var(--muted);font-size:12px}
+.foto-mini{position:relative;display:block}
+.foto-mini button{position:absolute;top:4px;right:4px;width:24px;height:24px;border-radius:50%;border:0;background:rgba(0,0,0,.65);color:#fff;cursor:pointer;font-size:16px;line-height:1}
+.modal form.wide{width:min(760px,100%)}
+.checklist{max-height:300px;overflow-y:auto;border:1px solid var(--line);border-radius:6px;padding:4px}
+.ck{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px;cursor:pointer;font-size:14px}
+.ck:hover{background:var(--surface-2)}
+.ck input{width:18px;height:18px;accent-color:var(--accent);flex:none}
