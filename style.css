@@ -198,3 +198,28 @@ label.dt{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mute
 .ck{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px;cursor:pointer;font-size:14px}
 .ck:hover{background:var(--surface-2)}
 .ck input{width:18px;height:18px;accent-color:var(--accent);flex:none}
+
+/* Lista de presença · Roubo do Arsenal */
+.ars-ctrl{display:grid;grid-template-columns:auto 1fr minmax(180px,240px);gap:18px;align-items:start}
+@media (max-width:900px){.ars-ctrl{grid-template-columns:1fr}}
+.horas{display:flex;gap:6px;flex-wrap:wrap}
+.hora{appearance:none;border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:6px 14px;min-width:82px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:1px;color:inherit}
+.hora b{font-family:var(--f-display);font-size:22px;line-height:1.1}
+.hora span{font-size:11px;color:var(--muted)}
+.hora:hover{border-color:var(--muted)}
+.hora.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.hora.on span{color:var(--accent-ink);opacity:.85}
+.ars-lista{max-height:none;border:0;border-top:1px solid var(--line);border-radius:0;padding:6px 10px}
+.ars-lista .ck input:disabled{opacity:.6}
+table.resumo th,table.resumo td{text-align:center}
+table.resumo th:first-child,table.resumo td:first-child{text-align:left}
+table.resumo tr.tot td{font-weight:600;background:var(--surface-2)}
+.cel{appearance:none;border:1px solid transparent;background:none;border-radius:6px;min-width:40px;padding:4px 8px;cursor:pointer;color:var(--muted);font-variant-numeric:tabular-nums}
+.cel.tem{color:var(--ink);font-weight:600;background:var(--accent-soft)}
+.cel.on{border-color:var(--accent)}
+.cel:hover{border-color:var(--muted)}
+.tipo-tag.ars{background:var(--bad-soft);color:var(--bad);border-color:var(--bad)}
+table.resumo th,table.resumo td{padding:8px 6px}
+.setor-fixo{display:flex;align-items:center;font-weight:600;background:var(--surface-2)}
+.ars-cols{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:0 12px}
+.panel-h .toolbar{gap:6px}

@@ -5,7 +5,8 @@ Painel web de controle de efetivo da base militar **Exército de Solano** (One S
 - **Efetivo:** cadastro com nome no RP, Discord (obrigatório), patente, setor, ingresso e observações
 - **Setores:** Sul, Norte, Centro, Leste e Especiais (editáveis), com as funções 1 CMD, 2 CMD, 1 AUX e 2 AUX
 - **Promoções e punições:** histórico completo, com motivo e autor
-- **Eventos e lista de presença:** Roubo do Arsenal, Treinamento e outros tipos; quem participou de cada evento, relatório de treinamento com instrutor e fotos, filtros por data e horário
+- **Lista de presença do Roubo do Arsenal:** dia, horário (11h, 13h, 15h, 17h, 19h) e setor; marca quem participou
+- **Eventos:** treinamentos e outros eventos, com relatório, instrutor, fotos e filtros por data e horário
 - **Acessos pela patente:** login com o nome do jogo e senha; cada conta é ligada a uma ficha e a patente define o que pode fazer
 - **Tempo real:** o que um oficial altera aparece na tela dos outros na hora
 
@@ -97,9 +98,20 @@ Cada conta é ligada a uma ficha do efetivo, e **a patente da ficha define o ace
 - Um militar fica em um setor por vez. Exonerado sai do setor automaticamente.
 - Quem pode mexer: ADM Geral e os cargos com **Gerenciar setores e funções** ligado.
 
-## Eventos e lista de presença
+## Lista de presença · Roubo do Arsenal
 
-- Aba **Eventos**: cada evento tem tipo, data e horário, título opcional, observações e a lista de quem participou.
+- Aba **Lista de presença**: escolha o dia, o horário (11h, 13h, 15h, 17h ou 19h) e o setor, marque quem participou e clique em **Salvar lista**.
+- Cada setor tem a sua lista em cada horário.
+- Quem marca: ADM Geral e generais (Major General ou acima) em qualquer setor;
+  **1 CMD, 2 CMD, 1 AUX e 2 AUX** só no próprio setor.
+- Quem vê: ADM e generais veem todos os setores; os demais veem **só a lista do próprio setor** (bloqueado no banco).
+- **Resumo do dia** (todos os setores × horários, com **Copiar resumo** para o Discord) fica na **Visão geral**
+  e só aparece para **Tenente General ou acima** e o ADM Geral.
+- As presenças do Roubo do Arsenal entram na contagem da ficha de cada militar, junto com as dos eventos.
+
+## Eventos (treinamentos e outros)
+
+- Aba **Eventos**: para treinamentos e eventos que não são o Roubo do Arsenal. Cada evento tem tipo, data e horário, título opcional, observações e a lista de quem participou.
 - Tipos marcados como **treinamento** viram relatório de treinamento: pedem instrutor responsável e conteúdo.
 - Até 6 fotos por evento (reduzidas automaticamente antes do envio). Só quem tem acesso ao painel vê as fotos.
 - Filtros por tipo, data e horário (De / Até), busca por participante e atalhos Hoje / 7 dias / 30 dias.

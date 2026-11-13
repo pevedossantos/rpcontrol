@@ -17,7 +17,8 @@ const DEF = {
   majgen:{cadastrar:true,editar:false,promover:true,punir:true,revogar:false,exonerar:false,presenca:true,ajustar_presenca:false,setores:false,max_patente:8}
 };
 const PUN_TIPOS = ["Advertência verbal","Advertência escrita","Suspensão","Detenção"];
-const HIST_TIPOS = {cadastro:"Cadastro",promocao:"Promoção",rebaixamento:"Rebaixamento",punicao:"Punição",revogacao:"Revogação de punição",exoneracao:"Exoneração",readmissao:"Readmissão",edicao:"Edição de dados",ajuste_ponto:"Ajuste de ponto",remocao:"Registro apagado",setor:"Setores e funções",acesso:"Acesso ao painel",evento:"Eventos"};
+const HIST_TIPOS = {cadastro:"Cadastro",promocao:"Promoção",rebaixamento:"Rebaixamento",punicao:"Punição",revogacao:"Revogação de punição",exoneracao:"Exoneração",readmissao:"Readmissão",edicao:"Edição de dados",ajuste_ponto:"Ajuste de ponto",remocao:"Registro apagado",setor:"Setores e funções",acesso:"Acesso ao painel",evento:"Eventos",arsenal:"Roubo do Arsenal"};
+const HORAS_ARSENAL = [11, 13, 15, 17, 19];
 const FUNCOES = [["1CMD","1º Comando","1 CMD"],["2CMD","2º Comando","2 CMD"],["1AUX","1º Auxiliar","1 AUX"],["2AUX","2º Auxiliar","2 AUX"]];
 const fnSigla = f => FUNCOES.find(x => x[0] === f)?.[2] || "";
 const fnNome = f => FUNCOES.find(x => x[0] === f)?.[1] || "";
@@ -33,7 +34,8 @@ const emailDe = nome => slugUsuario(nome) + "@" + DOMINIO_LOGIN;
 let sb = null;
 const S = {
   fase:"carregando", err:null, session:null, uid:null, nomeJogo:"", authModo:"entrar",
-  me:null, meuCargo:null, podeRegistrar:false, membros:[], setores:[], punicoes:[], eventos:[], tipos:[], presTot:{}, hist:[], staff:[], perms:{}, perfis:[],
+  me:null, meuCargo:null, podeRegistrar:false, membros:[], setores:[], punicoes:[], eventos:[], tipos:[], presTot:{}, arsenal:[], hist:[], staff:[], perms:{}, perfis:[],
+  resData:"", arsData:"", arsHora:null, arsSetor:"", arsSel:new Set(), arsChave:"", arsSujo:false,
   selEv:null, fTipo:"", fDe:"", fAte:"", qEv:"", fotoUrl:{},
   tab:"geral", sel:null, q:"", fPat:"", fStatus:"ativo", fSetor:"", fHist:"", permDraft:null, busy:false, entrando:false
 };
@@ -50,7 +52,11 @@ const can = p => isAdm() || !!perms()?.[p];
 const canActOn = m => isAdm() || Number(m.patente) < myLevel();
 function maxPromo(){ if (isAdm()) return PAT.length - 1; const P = perms(); if (!P || !P.promover) return 0; return Math.min(Number(P.max_patente ?? 0), myLevel() - 1); }
 function nivelLabel(c){ return c === "adm" ? "ADM Geral" : c === "leitor" ? "Visualização" : cargoInfo(c)?.n || "Sem acesso"; }
-function meLabel(){ return nivelLabel(S.meuCargo); }
+function meLabel(){
+  const mm = S.me?.membro_id && S.membros.find(m => m.id === S.me.membro_id);
+  if (S.meuCargo === "leitor" && mm?.funcao && mm.setorId) return `${fnSigla(mm.funcao)} · ${S.setores.find(x => x.id === mm.setorId)?.nome || ""}`;
+  return nivelLabel(S.meuCargo);
+}
 // Mesmo cálculo do banco, para mostrar o nível de cada conta na aba Acessos
 function cargoDaFicha(m){ if (!m || m.status !== "ativo") return null; return Number(m.patente) >= 9 ? CARGOS.find(c => c.lv === Number(m.patente))?.k : "leitor"; }
 const setorById = id => S.setores.find(x => x.id === id);
@@ -76,6 +82,8 @@ const mapP = r => ({id:r.id,membroId:r.membro_id,tipo:r.tipo,dias:r.dias,motivo:
 const mapPt = r => ({id:r.id,membroId:r.membro_id,membroNome:r.membro_nome,inicio:ms(r.inicio),fim:ms(r.fim),porLabel:r.por_label});
 const mapEv = r => ({id:r.id,tipoId:r.tipo_id,tipo:r.tipo_nome,treino:r.treinamento,titulo:r.titulo,data:ms(r.data_hora),instrutorId:r.instrutor_id,instrutor:r.instrutor_nome,descricao:r.descricao,fotos:r.fotos||[],criadoPor:r.criado_por,porLabel:r.criado_por_label,
   presentes:(r.presencas||[]).map(p => ({id:p.membro_id, nome:p.membro_nome}))});
+const mapArs = r => ({id:r.id,data:r.data,hora:r.hora,setorId:r.setor_id,ts:new Date(r.data + "T" + String(r.hora).padStart(2,"0") + ":00:00").getTime(),porLabel:r.atualizado_label,em:ms(r.atualizado_em),
+  presentes:(r.arsenal_presencas||[]).map(p => ({id:p.membro_id, nome:p.membro_nome}))});
 const mapH = r => ({id:r.id,tipo:r.tipo,membroId:r.membro_id,membroNome:r.membro_nome,texto:r.texto,motivo:r.motivo,porLabel:r.por_label,em:ms(r.em)});
 
 /* ===== Carregamento ===== */
@@ -84,7 +92,8 @@ const LOADERS = {
   membros:     async () => { S.membros  = (await q(sb.from("membros").select("*").limit(2000))).map(mapM); },
   punicoes:    async () => { S.punicoes = (await q(sb.from("punicoes").select("*").order("em",{ascending:false}).limit(2000))).map(mapP); },
   eventos:     async () => { S.eventos  = (await q(sb.from("eventos").select("*, presencas(membro_id, membro_nome)").order("data_hora",{ascending:false}).limit(500))).map(mapEv); },
-  presencas:   async () => { const rows = await q(sb.rpc("presencas_por_membro")); S.presTot = Object.fromEntries(rows.map(r => [r.membro_id, {total:Number(r.total), ultima:ms(r.ultima)}])); },
+  presencas:   async () => { const rows = await q(sb.rpc("presencas_por_membro")); S.presTot = Object.fromEntries(rows.map(r => [r.membro_id, {total:Number(r.total), eventos:Number(r.eventos), arsenal:Number(r.arsenal)}])); },
+  arsenal:     async () => { S.arsenal  = (await q(sb.from("arsenal").select("*, arsenal_presencas(membro_id, membro_nome)").order("data",{ascending:false}).limit(1000))).map(mapArs); },
   tipos_evento: async () => { S.tipos   = await q(sb.from("tipos_evento").select("*").order("ordem").order("nome")); },
   historico:   async () => { S.hist     = (await q(sb.from("historico").select("*").order("em",{ascending:false}).limit(500))).map(mapH); },
   setores:     async () => { S.setores  = await q(sb.from("setores").select("*").order("ordem").order("nome")); },
@@ -109,6 +118,8 @@ function agendar(tabela){
   if (tabela === "staff" || tabela === "membros") verificarCargo();
   if (tabela === "staff") { recarregarMeuCargo(); return; }
   if (tabela === "presencas") { pendentes.add("eventos"); }
+  if (tabela === "arsenal_presencas") { tabela = "arsenal"; }
+  if (tabela === "arsenal") { pendentes.add("presencas"); }
   if (tabela === "eventos") { pendentes.add("presencas"); }
   if (!LOADERS[tabela]) return;
   pendentes.add(tabela); clearTimeout(tRefetch);
@@ -181,7 +192,7 @@ async function recarregarMeuCargo(){
       const { data: existe, error: e2 } = await sb.rpc("existe_adm");
       if (e2) throw e2;
       S.meuCargo = null; S.fase = existe ? "pendente" : "sem-adm";
-      S.membros = []; S.setores = []; S.punicoes = []; S.eventos = []; S.presTot = {}; S.hist = []; S.staff = []; S.perfis = [];
+      S.membros = []; S.setores = []; S.punicoes = []; S.eventos = []; S.arsenal = []; S.presTot = {}; S.hist = []; S.staff = []; S.perfis = [];
     } else {
       const { data: c, error: e3 } = await sb.rpc("meu_cargo");
       if (e3) throw e3;
@@ -219,7 +230,7 @@ async function rpc(fn, args, ok){
     const { error } = await sb.rpc(fn, args);
     if (error) throw error;
     if (ok) toast(ok);
-    await carregar(["membros","setores","punicoes","eventos","presencas","tipos_evento","historico","staff"]); render();
+    await carregar(["membros","setores","punicoes","eventos","arsenal","presencas","tipos_evento","historico","staff"]); render();
     return true;
   } catch (e) { toast(e.message || "Não foi possível salvar. Tente de novo.", "err"); return false; }
   finally { S.busy = false; }
@@ -228,14 +239,14 @@ async function rpc(fn, args, ok){
 /* ===== Render ===== */
 function render(){
   renderWho();
-  const tabs = [["geral","Visão geral"],["efetivo","Efetivo"],["setores","Setores"],["eventos","Eventos"],["historico","Histórico"]];
+  const tabs = [["geral","Visão geral"],["efetivo","Efetivo"],["setores","Setores"],["arsenal","Lista de presença"],["eventos","Eventos"],["historico","Histórico"]];
   if (isAdm()) tabs.push(["acessos","Acessos"]);
   $("#tabs").innerHTML = S.fase === "app" ? tabs.map(([k,n]) => `<button class="tab" role="tab" data-a="tab" data-id="${k}" aria-selected="${S.tab === k}">${n}</button>`).join("") : "";
   const app = $("#app");
   const f = document.activeElement; const fid = f && f.id && app.contains(f) ? f.id : null; let ss = null, se = null;
   if (fid) { try { ss = f.selectionStart; se = f.selectionEnd; } catch {} }
   app.innerHTML = ({config:vConfig, login:vLogin, pendente:vPendente, suspenso:vSuspenso, "sem-adm":vSemAdm, erro:vErro, carregando:() => `<div class="loading">Carregando…</div>`}[S.fase]
-    || (() => ({geral:vGeral, efetivo:vEfetivo, setores:vSetores, eventos:vEventos, historico:vHist, acessos:vAcessos}[S.tab] || vGeral)()))();
+    || (() => ({geral:vGeral, efetivo:vEfetivo, setores:vSetores, arsenal:vArsenal, eventos:vEventos, historico:vHist, acessos:vAcessos}[S.tab] || vGeral)()))();
   if (fid) { const n = document.getElementById(fid); if (n) { n.focus(); try { if (ss != null) n.setSelectionRange(ss, se); } catch {} } }
   renderDrawer();
 }
@@ -268,7 +279,9 @@ function vErro(){ return `<div class="gate"><h2>Erro</h2><p>${esc(S.err)}</p><bu
 function vGeral(){
   const ativos = S.membros.filter(m => m.status !== "exonerado");
   const ev7 = S.eventos.filter(e => e.data >= Date.now() - 7*864e5);
-  const pres7 = ev7.reduce((n, e) => n + e.presentes.length, 0);
+  const ars7 = S.arsenal.filter(a => a.ts >= Date.now() - 7*864e5);
+  const roubos7 = new Set(ars7.map(a => a.data + "|" + a.hora)).size;
+  const pres7 = ev7.reduce((n, e) => n + e.presentes.length, 0) + ars7.reduce((n, a) => n + a.presentes.length, 0);
   const punAt = S.punicoes.filter(p => p.ativa);
   const cont = PAT.map((_, i) => ativos.filter(m => Number(m.patente) === i).length);
   const mx = Math.max(1, ...cont);
@@ -276,11 +289,13 @@ function vGeral(){
   return `
   <section class="kpis">
     <div class="kpi"><div class="v num">${ativos.length}</div><div class="k">Efetivo ativo</div></div>
-    <div class="kpi"><div class="v num" style="color:var(--ok)">${ev7.length}</div><div class="k">Eventos em 7 dias</div></div>
+    <div class="kpi"><div class="v num" style="color:var(--ok)">${roubos7}</div><div class="k">Roubos do Arsenal em 7 dias</div></div>
     <div class="kpi"><div class="v num">${pres7}</div><div class="k">Presenças em 7 dias</div></div>
+    <div class="kpi"><div class="v num">${ev7.length}</div><div class="k">Treinos e eventos em 7 dias</div></div>
     <div class="kpi"><div class="v num" style="color:${punAt.length ? "var(--bad)" : "inherit"}">${punAt.length}</div><div class="k">Punições ativas</div></div>
 
   </section>
+  ${painelResumoArsenal()}
   <div class="grid2">
     <section class="panel"><div class="panel-h"><h2>Efetivo por patente</h2></div><div class="panel-b dist">${dist}</div></section>
     ${painelSetores(ativos)}
@@ -365,8 +380,114 @@ function vSetores(){
 }
 
 
+/* ===== Lista de presença · Roubo do Arsenal ===== */
+const hojeISO = () => today();
+function horaPadrao(){ const h = new Date().getHours(); const passadas = HORAS_ARSENAL.filter(x => x <= h); return passadas.length ? passadas[passadas.length - 1] : HORAS_ARSENAL[0]; }
+const meuMembro = () => S.me?.membro_id ? mById(S.me.membro_id) : null;
+// Setores que posso marcar: ADM e generais todos; quem tem função, só o próprio
+function setoresMarcaveis(){
+  if (isAdm() || cargoInfo(S.meuCargo)) return S.setores.map(x => x.id);
+  const mm = meuMembro();
+  return mm && mm.status === "ativo" && mm.funcao && mm.setorId && setorById(mm.setorId) ? [mm.setorId] : [];
+}
+// Setores que posso ver: ADM e generais todos; os demais, só o próprio setor
+function setoresVisiveis(){
+  if (isAdm() || cargoInfo(S.meuCargo)) return S.setores.map(x => x.id);
+  const mm = meuMembro();
+  return mm && mm.status === "ativo" && mm.setorId && setorById(mm.setorId) ? [mm.setorId] : [];
+}
+// Resumo do dia de todos os setores: Tenente General para cima e ADM
+const podeResumo = () => isAdm() || ["tengen","celgen","genadj","federal"].includes(S.meuCargo);
+const listaArsenal = (data, hora, setor) => S.arsenal.find(a => a.data === data && a.hora === hora && a.setorId === setor);
+function garantirArsenal(){
+  if (!S.arsData) S.arsData = hojeISO();
+  if (!S.arsHora) S.arsHora = horaPadrao();
+  const vis = setoresVisiveis();
+  if (!S.arsSetor || !vis.includes(S.arsSetor)) { const mm = meuMembro(); S.arsSetor = (setoresMarcaveis().length === 1 ? setoresMarcaveis()[0] : (mm?.setorId && vis.includes(mm.setorId) ? mm.setorId : vis[0])) || ""; }
+  const chave = `${S.arsData}|${S.arsHora}|${S.arsSetor}`;
+  if (chave !== S.arsChave || !S.arsSujo) {
+    const l = listaArsenal(S.arsData, S.arsHora, S.arsSetor);
+    S.arsSel = new Set((l?.presentes || []).map(p => p.id)); S.arsChave = chave; S.arsSujo = false;
+  }
+}
+function trocarArsenal(campo, valor){
+  const aplicar = () => { S.arsSujo = false; S[campo] = valor; render(); };
+  if (S.arsSujo && S[campo] !== valor) mConfirm("Descartar alterações?", "A lista atual tem marcações que não foram salvas. Trocar agora descarta essas marcações.", "Descartar e trocar", () => { aplicar(); return true; });
+  else aplicar();
+}
+function vArsenal(){
+  if (!S.setores.length) return `<div class="panel empty">Cadastre os setores antes de usar a lista de presença.</div>`;
+  const vis = setoresVisiveis();
+  if (!vis.length) return `<div class="panel empty">Você ainda não está em nenhum setor. A lista de presença mostra só o setor de cada militar; fale com o comando para ser colocado em um setor.</div>`;
+  garantirArsenal();
+  const marcaveis = setoresMarcaveis();
+  const pode = marcaveis.includes(S.arsSetor);
+  const lista = listaArsenal(S.arsData, S.arsHora, S.arsSetor);
+  const ids = new Set(lista?.presentes.map(p => p.id) || []);
+  const cand = S.membros.filter(m => (m.status === "ativo" && m.setorId === S.arsSetor) || ids.has(m.id))
+    .sort((a,b) => b.patente - a.patente || String(a.nome).localeCompare(String(b.nome), "pt-BR"));
+  const nHora = h => listaArsenal(S.arsData, h, S.arsSetor)?.presentes.length || 0;
+  const dataTxt = new Date(S.arsData + "T12:00:00").toLocaleDateString("pt-BR", {weekday:"long", day:"2-digit", month:"2-digit", year:"numeric"});
+  const setorCampo = vis.length > 1
+    ? `<select class="input" id="arsSetor">${S.setores.filter(x => vis.includes(x.id)).map(x => `<option value="${x.id}" ${x.id === S.arsSetor ? "selected" : ""}>${esc(x.nome)}${marcaveis.includes(x.id) ? "" : " (só ver)"}</option>`).join("")}</select>`
+    : `<div class="input setor-fixo">${esc(setorNome(S.arsSetor))}</div>`;
+  return `<section class="panel">
+    <div class="panel-h"><h2>Lista de presença · Roubo do Arsenal</h2></div>
+    <div class="panel-b ars-ctrl">
+      <div class="field"><label for="arsData">Dia</label><div class="toolbar"><input class="input" type="date" id="arsData" value="${esc(S.arsData)}" max="${hojeISO()}">
+        <button class="btn sm" data-a="arsDia" data-id="0">Hoje</button><button class="btn sm" data-a="arsDia" data-id="1">Ontem</button></div>
+        <span class="hint" style="text-transform:capitalize">${esc(dataTxt)}</span></div>
+      <div class="field"><label>Horário</label><div class="horas">${HORAS_ARSENAL.map(h => `<button class="hora ${h === S.arsHora ? "on" : ""}" data-a="arsHora" data-id="${h}" aria-pressed="${h === S.arsHora}"><b>${h}h</b><span>${nHora(h)} presente${nHora(h) === 1 ? "" : "s"}</span></button>`).join("")}</div></div>
+      <div class="field"><label for="arsSetor">Setor</label>${setorCampo}</div>
+    </div>
+  </section>
+  <section class="panel"><div class="panel-h"><h2>Setor ${esc(setorNome(S.arsSetor))} · ${S.arsHora}h</h2><span class="muted num" id="ars-cont">${S.arsSel.size} de ${cand.length} marcados</span>
+      ${pode ? `<span class="sp" style="display:flex;gap:6px"><button class="btn sm" data-a="arsTodos">Marcar todos</button><button class="btn sm" data-a="arsNenhum">Desmarcar</button></span>` : ""}</div>
+    ${!pode ? `<div class="panel-b"><div class="note">Só generais e quem tem função no setor (1 CMD, 2 CMD, 1 AUX, 2 AUX) marcam a lista. Aqui é só visualização.</div></div>` : ""}
+    ${cand.length ? `<div class="checklist ars-lista ars-cols">${cand.map(m => `<label class="ck"><input type="checkbox" data-a="arsMarca" value="${m.id}" ${S.arsSel.has(m.id) ? "checked" : ""} ${pode ? "" : "disabled"}> ${chip(m.patente)} <span>${esc(m.nome)}</span>${m.funcao ? fnChip(m.funcao) : ""}${m.status !== "ativo" || m.setorId !== S.arsSetor ? `<span class="muted" style="font-size:12px;margin-left:auto">fora do setor</span>` : ""}</label>`).join("")}</div>`
+      : `<div class="empty">Nenhum militar ativo no Setor ${esc(setorNome(S.arsSetor))}.</div>`}
+    <div class="panel-b toolbar">
+      ${pode ? `<button class="btn pri" data-a="arsSalvar" ${S.arsSujo ? "" : "disabled"}>${S.arsSujo ? "Salvar lista" : "Lista salva"}</button>` : ""}
+      <span class="muted" style="font-size:13px">${lista ? `Última alteração: ${esc(lista.porLabel || "—")} · ${fmtTs(lista.em)}` : "Nenhuma lista salva neste horário ainda."}</span>
+    </div>
+  </section>`;
+}
+// Painel da Visão geral (só Tenente General para cima)
+function painelResumoArsenal(){
+  if (!podeResumo() || !S.setores.length) return "";
+  if (!S.resData) S.resData = hojeISO();
+  const d = S.resData;
+  const doDia = S.arsenal.filter(a => a.data === d);
+  const porHora = h => doDia.filter(a => a.hora === h).reduce((n, a) => n + a.presentes.length, 0);
+  return `<section class="panel"><div class="panel-h"><h2>Roubo do Arsenal · resumo do dia</h2>
+      <span class="sp toolbar"><input class="input" type="date" id="resData" value="${esc(d)}" max="${hojeISO()}" aria-label="Dia do resumo">
+      <button class="btn sm" data-a="resDia" data-id="0">Hoje</button><button class="btn sm" data-a="resDia" data-id="1">Ontem</button>
+      <button class="btn sm" data-a="arsCopiar" ${doDia.length ? "" : "disabled"}>Copiar resumo</button></span></div>
+    <div class="tablewrap"><table class="resumo"><thead><tr><th>Setor</th>${HORAS_ARSENAL.map(h => `<th>${h}h</th>`).join("")}<th>Total</th></tr></thead><tbody>
+    ${S.setores.map(st => { const linha = HORAS_ARSENAL.map(h => listaArsenal(d, h, st.id)); const tot = linha.reduce((n, l) => n + (l?.presentes.length || 0), 0);
+      return `<tr><td>${esc(st.nome)}</td>${linha.map((l, i) => `<td><button class="cel ${l ? "tem" : ""}" data-a="abrirArs" data-id="${d}|${HORAS_ARSENAL[i]}|${st.id}" title="Abrir a lista">${l ? l.presentes.length : "—"}</button></td>`).join("")}<td class="num"><b>${tot}</b></td></tr>`; }).join("")}
+    <tr class="tot"><td>Total</td>${HORAS_ARSENAL.map(h => `<td class="num">${porHora(h)}</td>`).join("")}<td class="num">${doDia.reduce((n, a) => n + a.presentes.length, 0)}</td></tr>
+    </tbody></table></div></section>`;
+}
+
+function textoResumoArsenal(){
+  const d = S.resData || hojeISO();
+  const L = [`**Roubo do Arsenal · ${new Date(d + "T12:00:00").toLocaleDateString("pt-BR")}**`];
+  for (const h of HORAS_ARSENAL) {
+    const ls = S.arsenal.filter(a => a.data === d && a.hora === h);
+    if (!ls.length) continue;
+    const tot = ls.reduce((n, a) => n + a.presentes.length, 0);
+    L.push(""); L.push(`**${h}h** · ${tot} presente${tot === 1 ? "" : "s"}`);
+    for (const a of ls) L.push(`Setor ${setorNome(a.setorId) || "?"} (${a.presentes.length}): ` + a.presentes.map(p => mById(p.id) ? mLabel(mById(p.id)) : p.nome).join(", "));
+  }
+  return L.join("\n");
+}
+
 /* ===== Eventos e lista de presença ===== */
-function pres30(id){ const lim = Date.now() - 30*864e5; let n = 0; for (const e of S.eventos) { if (e.data < lim) break; if (e.presentes.some(p => p.id === id)) n++; } return n; }
+function pres30(id){ const lim = Date.now() - 30*864e5; let n = 0;
+  for (const e of S.eventos) { if (e.data < lim) break; if (e.presentes.some(p => p.id === id)) n++; }
+  for (const a of S.arsenal) { if (a.ts >= lim && a.presentes.some(p => p.id === id)) n++; }
+  return n; }
 const podeEditarEv = e => isAdm() || can("ajustar_presenca") || (e.criadoPor === S.uid && S.podeRegistrar);
 const podeTipos = () => isAdm() || can("ajustar_presenca");
 const tipoById = id => S.tipos.find(t => t.id === id);
@@ -517,7 +638,9 @@ function renderDrawer(){
   if (!m) { root.innerHTML = ""; return; }
   const ex = m.status === "exonerado", act = canActOn(m);
   const pun = S.punicoes.filter(p => p.membroId === m.id), pAt = pun.filter(p => p.ativa), pOld = pun.filter(p => !p.ativa);
-  const evs = S.eventos.filter(e => e.presentes.some(p => p.id === m.id));
+  const evs = S.eventos.filter(e => e.presentes.some(p => p.id === m.id)).map(e => ({...e, ars:false}))
+    .concat(S.arsenal.filter(a => a.presentes.some(p => p.id === m.id)).map(a => ({id:a.id, ars:true, tipo:"Roubo do Arsenal", titulo:`${a.hora}h · Setor ${setorNome(a.setorId) || "?"}`, data:a.ts, a})))
+    .sort((x, y) => y.data - x.data);
   const hist = S.hist.filter(h => h.membroId === m.id).slice(0, 15);
   const b = [];
   if (act && !ex && can("promover")) b.push(`<button class="btn" data-a="promover" data-id="${m.id}">Promover / rebaixar</button>`);
@@ -535,14 +658,14 @@ function renderDrawer(){
     <div class="dr-b">
       <dl class="facts"><div><dt>Discord</dt><dd>${esc(m.discord || "—")}</dd></div>
         <div><dt>Setor</dt><dd>${m.setorId && setorById(m.setorId) ? `${esc(setorNome(m.setorId))}${m.funcao ? ` · ${esc(fnNome(m.funcao))}` : ""}` : "Sem setor"}</dd></div>
-        <div><dt>Ingresso</dt><dd class="num">${fmtDate(m.ingresso)}</dd></div><div><dt>Presenças</dt><dd class="num">${S.presTot[m.id]?.total || 0} no total · ${pres30(m.id)} em 30 dias</dd></div>
+        <div><dt>Ingresso</dt><dd class="num">${fmtDate(m.ingresso)}</dd></div><div><dt>Presenças</dt><dd class="num">${S.presTot[m.id]?.total || 0} no total · ${pres30(m.id)} em 30 dias<div class="muted" style="font-size:12px;font-weight:400">${S.presTot[m.id]?.arsenal || 0} no Roubo do Arsenal · ${S.presTot[m.id]?.eventos || 0} em eventos</div></dd></div>
         ${(() => { const c = contaDe(m.id); return c ? `<div><dt>Conta no painel</dt><dd>${esc(nivelLabel(cargoDaFicha(m)) )}</dd></div>` : ""; })()}
         ${m.obs ? `<div style="grid-column:1/-1"><dt>Observações</dt><dd style="font-weight:400;white-space:pre-wrap">${esc(m.obs)}</dd></div>` : ""}</dl>
       ${b.length ? `<div class="actions">${b.join("")}</div>` : ""}
       ${!act ? `<div class="note">Patente igual ou superior à sua: você só pode visualizar este militar.</div>` : ""}
       <div class="sec"><h3>Punições ativas</h3>${pAt.length ? `<div class="list" style="border:1px solid var(--line);border-radius:6px">${pAt.map(p => punRow(p, act)).join("")}</div>` : `<div class="muted" style="font-size:14px">Nenhuma.</div>`}
         ${pOld.length ? `<details style="margin-top:8px"><summary class="muted" style="cursor:pointer;font-size:13px">${pOld.length} revogada${pOld.length > 1 ? "s" : ""}</summary><div class="list" style="border:1px solid var(--line);border-radius:6px;margin-top:6px">${pOld.map(p => punRow(p, false)).join("")}</div></details>` : ""}</div>
-      <div class="sec"><h3>Últimas presenças</h3>${evs.length ? `<div class="list" style="border:1px solid var(--line);border-radius:6px">${evs.slice(0, 8).map(e => `<div class="li click-li" data-a="abrirEv" data-id="${e.id}" tabindex="0"><span class="tipo-tag ${e.treino ? "treino" : ""}">${esc(e.tipo || "Evento")}</span><span class="grow">${esc(e.titulo || "")}</span><span class="muted num" style="font-size:13px">${fmtTs(e.data)}</span></div>`).join("")}</div>` : `<div class="muted" style="font-size:14px">Nenhuma presença registrada.</div>`}</div>
+      <div class="sec"><h3>Últimas presenças</h3>${evs.length ? `<div class="list" style="border:1px solid var(--line);border-radius:6px">${evs.slice(0, 8).map(e => `<div class="li click-li" ${e.ars ? `data-a="abrirArs" data-id="${e.a.data}|${e.a.hora}|${e.a.setorId}"` : `data-a="abrirEv" data-id="${e.id}"`} tabindex="0"><span class="tipo-tag ${e.treino ? "treino" : e.ars ? "ars" : ""}">${esc(e.tipo || "Evento")}</span><span class="grow">${esc(e.titulo || "")}</span><span class="muted num" style="font-size:13px">${fmtTs(e.data)}</span></div>`).join("")}</div>` : `<div class="muted" style="font-size:14px">Nenhuma presença registrada.</div>`}</div>
       <div class="sec"><h3>Histórico</h3><div style="border:1px solid var(--line);border-radius:6px">${feed(hist)}</div></div>
     </div></aside>`;
 }
@@ -827,7 +950,9 @@ document.addEventListener("click", e => {
   const a = t.dataset.a, id = t.dataset.id;
   if (a === "mscrim" && e.target !== t) return;
   if (t.tagName === "A" || a === "abrir") e.preventDefault();
-  if (t.tagName === "SELECT" || t.type === "checkbox" || t.type === "radio") return;
+  if (t.tagName === "SELECT" || t.type === "radio") return;
+  if (t.type === "checkbox" && a !== "arsMarca") return;
+  if (a === "arsMarca") return; // tratado no "change"
   const m = id ? mById(id) : null;
   switch (a) {
     case "modoCriar": S.authModo = "criar"; render(); break;
@@ -850,6 +975,15 @@ document.addEventListener("click", e => {
     case "horas": m && mHoras(m); break;
     case "apagarMembro": m && mConfirm("Apagar cadastro", `Apagar de vez o cadastro de <b>${esc(mLabel(m))}</b>? O histórico continua, mas a ficha, as punições e as presenças dele somem. Para tirar alguém do efetivo, prefira Exonerar.`, "Apagar", async () => { const ok = await rpc("apagar_membro", {p_id:m.id}, "Cadastro apagado."); if (ok) S.sel = null; return ok; }); break;
     case "abrirEv": S.selEv = id; S.sel = null; renderDrawer(); break;
+    case "abrirArs": { const [d, h, st] = id.split("|"); S.sel = null; S.selEv = null; S.tab = "arsenal"; S.arsSujo = false; S.arsData = d; S.arsHora = Number(h); S.arsSetor = st; render(); window.scrollTo(0, 0); break; }
+    case "arsHora": trocarArsenal("arsHora", Number(id)); break;
+    case "arsDia": { const d = new Date(); d.setDate(d.getDate() - Number(id)); trocarArsenal("arsData", `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`); break; }
+    case "resDia": { const d = new Date(); d.setDate(d.getDate() - Number(id)); S.resData = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; render(); break; }
+    case "arsCel": { const [h, st] = id.split("|"); const ir = () => { S.arsSujo = false; S.arsHora = Number(h); S.arsSetor = st; render(); };
+      if (S.arsSujo && (Number(h) !== S.arsHora || st !== S.arsSetor)) mConfirm("Descartar alterações?", "A lista atual tem marcações que não foram salvas. Trocar agora descarta essas marcações.", "Descartar e trocar", () => { ir(); return true; }); else ir(); break; }
+    case "arsTodos": case "arsNenhum": document.querySelectorAll(".ars-lista input[data-a='arsMarca']").forEach(i => { if (!i.disabled) { i.checked = a === "arsTodos"; i.checked ? S.arsSel.add(i.value) : S.arsSel.delete(i.value); } }); S.arsSujo = true; render(); break;
+    case "arsSalvar": (async () => { const ok = await rpc("salvar_arsenal", { p_data:S.arsData, p_hora:S.arsHora, p_setor:S.arsSetor, p_presentes:[...S.arsSel] }, S.arsSel.size ? "Lista salva." : "Lista apagada."); if (ok) { S.arsSujo = false; render(); } })(); break;
+    case "arsCopiar": if (!podeResumo()) break; navigator.clipboard.writeText(textoResumoArsenal()).then(() => toast("Resumo copiado. Cole no Discord ou onde quiser."), () => toast("Não foi possível copiar automaticamente.", "err")); break;
     case "novoEv": if (S.podeRegistrar) mEvento(null); break;
     case "editarEv": { const ev = S.eventos.find(x => x.id === id); ev && mEvento(ev); break; }
     case "apagarEv": { const ev = S.eventos.find(x => x.id === id); if (!ev) break;
@@ -913,6 +1047,12 @@ document.addEventListener("change", e => {
   if (t.id === "fPat") { S.fPat = t.value; render(); }
   else if (t.id === "fSetor") { S.fSetor = t.value; render(); }
   else if (t.id === "fTipo") { S.fTipo = t.value; render(); }
+  else if (t.id === "resData") { if (t.value) { S.resData = t.value > today() ? today() : t.value; render(); } }
+  else if (t.id === "arsData") { if (t.value) trocarArsenal("arsData", t.value > today() ? today() : t.value); }
+  else if (t.id === "arsSetor") { const v = t.value; t.value = S.arsSetor; trocarArsenal("arsSetor", v); }
+  else if (t.dataset.a === "arsMarca") { t.checked ? S.arsSel.add(t.value) : S.arsSel.delete(t.value); S.arsSujo = true;
+    const c = $("#ars-cont"); if (c) c.textContent = `${S.arsSel.size} de ${document.querySelectorAll(".ars-lista input").length} marcados`;
+    const b = document.querySelector("[data-a='arsSalvar']"); if (b) { b.disabled = false; b.textContent = "Salvar lista"; } }
   else if (t.id === "fDe") { S.fDe = t.value; render(); }
   else if (t.id === "fAte") { S.fAte = t.value; render(); }
   else if (t.id === "e-setor") filtrarChecklist();
@@ -938,4 +1078,5 @@ document.addEventListener("keydown", e => {
   if (e.key === "Enter" && e.target.matches("[data-a='abrirEv']")) { S.selEv = e.target.dataset.id; S.sel = null; renderDrawer(); }
 });
 
+window.addEventListener("beforeunload", e => { if (S.arsSujo) { e.preventDefault(); e.returnValue = ""; } });
 boot().catch(e => { S.fase = "erro"; S.err = "Não foi possível iniciar o painel: " + (e.message || e); render(); });

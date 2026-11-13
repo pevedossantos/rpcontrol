@@ -207,6 +207,31 @@ create table if not exists public.presencas (
 );
 create index if not exists presencas_membro_idx on public.presencas (membro_id);
 
+-- Roubo do Arsenal: uma lista por dia, horário (11, 13, 15, 17, 19) e setor
+create table if not exists public.arsenal (
+  id               uuid primary key default gen_random_uuid(),
+  data             date not null,
+  hora             int  not null check (hora in (11, 13, 15, 17, 19)),
+  setor_id         uuid not null references public.setores on delete cascade,
+  atualizado_por   uuid,
+  atualizado_label text,
+  atualizado_em    timestamptz not null default now(),
+  unique (data, hora, setor_id)
+);
+create index if not exists arsenal_data_idx on public.arsenal (data desc);
+create table if not exists public.arsenal_presencas (
+  arsenal_id  uuid not null references public.arsenal on delete cascade,
+  membro_id   uuid not null references public.membros on delete cascade,
+  membro_nome text not null default '',
+  primary key (arsenal_id, membro_id)
+);
+create index if not exists arsenal_presencas_membro_idx on public.arsenal_presencas (membro_id);
+
+-- O Roubo do Arsenal saiu da aba Eventos (tem lista própria). O tipo só é apagado se nenhum evento usar.
+delete from public.tipos_evento t
+ where lower(trim(t.nome)) = 'roubo do arsenal'
+   and not exists (select 1 from public.eventos e where e.tipo_id = t.id);
+
 -- Permissões de eventos (substituem as de ponto na tela)
 do $$ begin
   if not exists (select 1 from information_schema.columns where table_schema='public' and table_name='cargo_perms' and column_name='presenca') then
@@ -794,13 +819,16 @@ begin
 end $$;
 
 -- Total de presenças por militar (todas as datas)
+drop function if exists public.presencas_por_membro();
 create or replace function public.presencas_por_membro()
-returns table (membro_id uuid, total bigint, ultima timestamptz)
+returns table (membro_id uuid, total bigint, eventos bigint, arsenal bigint)
 language sql stable security definer set search_path = public as $$
-  select p.membro_id, count(*), max(e.data_hora)
-  from presencas p join eventos e on e.id = p.evento_id
+  select x.membro_id, count(*), count(*) filter (where x.origem = 'e'), count(*) filter (where x.origem = 'a')
+  from (select p.membro_id, 'e' as origem from presencas p
+        union all
+        select ap.membro_id, 'a' from arsenal_presencas ap) x
   where is_staff()
-  group by p.membro_id
+  group by x.membro_id
 $$;
 
 create or replace function public.criar_tipo_evento(p_nome text, p_treinamento boolean)
@@ -831,6 +859,80 @@ returns void language plpgsql security definer set search_path = public as $$
 begin
   if not pode_ajustar_eventos() then raise exception 'Seu cargo não pode gerenciar tipos de evento.'; end if;
   delete from tipos_evento where id = p_id;  -- eventos antigos guardam o nome do tipo
+end $$;
+
+-- ---------------------------------------------------------------------
+-- Lista de presença do Roubo do Arsenal
+-- ---------------------------------------------------------------------
+
+-- Pode marcar a lista deste setor: ADM e generais (Major General ou acima) marcam qualquer setor;
+-- 1 CMD, 2 CMD, 1 AUX e 2 AUX marcam só o próprio setor.
+create or replace function public.pode_marcar_arsenal(p_setor uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select is_adm()
+      or meu_cargo() in ('majgen','tengen','celgen','genadj','federal')
+      or exists (select 1 from staff s join membros m on m.id = s.membro_id
+                 where s.user_id = auth.uid() and m.status = 'ativo' and m.funcao is not null and m.setor_id = p_setor)
+$$;
+
+-- Quem vê a lista de um setor: ADM e generais veem todos; os demais, só a do próprio setor
+create or replace function public.pode_ver_arsenal(p_setor uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select is_adm()
+      or meu_cargo() in ('majgen','tengen','celgen','genadj','federal')
+      or exists (select 1 from staff s join membros m on m.id = s.membro_id
+                 where s.user_id = auth.uid() and m.status = 'ativo' and m.setor_id = p_setor)
+$$;
+
+-- Resumo do dia (todos os setores): só Tenente General para cima e ADM
+create or replace function public.pode_resumo_arsenal() returns boolean
+language sql stable security definer set search_path = public as $$
+  select is_adm() or meu_cargo() in ('tengen','celgen','genadj','federal')
+$$;
+
+-- Salva a lista completa de presentes de um setor num dia/horário. Lista vazia apaga a lista.
+create or replace function public.salvar_arsenal(p_data date, p_hora int, p_setor uuid, p_presentes uuid[])
+returns void language plpgsql security definer set search_path = public as $$
+declare a arsenal; sn text; qtd int := coalesce(array_length(p_presentes, 1), 0); fora int;
+begin
+  if p_data is null then raise exception 'Escolha o dia.'; end if;
+  if p_hora is null or p_hora not in (11, 13, 15, 17, 19) then raise exception 'Escolha um horário válido (11h, 13h, 15h, 17h ou 19h).'; end if;
+  if p_data > (now() at time zone 'America/Sao_Paulo')::date then raise exception 'Não dá para marcar presença em um dia que ainda não chegou.'; end if;
+  select nome into sn from setores where id = p_setor;
+  if not found then raise exception 'Escolha o setor.'; end if;
+  if not pode_marcar_arsenal(p_setor) then raise exception 'Você só pode marcar a lista do seu próprio setor.'; end if;
+  if qtd > 200 then raise exception 'Máximo de 200 presentes por lista.'; end if;
+
+  select * into a from arsenal where data = p_data and hora = p_hora and setor_id = p_setor for update;
+
+  select count(*) into fora from unnest(coalesce(p_presentes, '{}')) x(id)
+   where not exists (select 1 from membros m where m.id = x.id and
+           ((m.status = 'ativo' and m.setor_id = p_setor)
+            or (a.id is not null and exists (select 1 from arsenal_presencas ap where ap.arsenal_id = a.id and ap.membro_id = m.id))));
+  if fora > 0 then raise exception 'Só é possível marcar militares ativos do Setor %.', sn; end if;
+
+  if qtd = 0 then
+    if a.id is not null then
+      delete from arsenal where id = a.id;
+      perform _log('arsenal', null::membros, 'Roubo do Arsenal ' || to_char(p_data, 'DD/MM') || ' ' || p_hora || 'h · Setor ' || sn || ': lista apagada', '');
+    end if;
+    return;
+  end if;
+
+  if a.id is null then
+    insert into arsenal (data, hora, setor_id, atualizado_por, atualizado_label)
+    values (p_data, p_hora, p_setor, auth.uid(), meu_rotulo()) returning * into a;
+  else
+    update arsenal set atualizado_por = auth.uid(), atualizado_label = meu_rotulo(), atualizado_em = now() where id = a.id;
+  end if;
+
+  delete from arsenal_presencas where arsenal_id = a.id and membro_id <> all (p_presentes);
+  insert into arsenal_presencas (arsenal_id, membro_id, membro_nome)
+  select a.id, m.id, patente_sigla(m.patente) || ' ' || m.nome from membros m where m.id = any (p_presentes)
+  on conflict (arsenal_id, membro_id) do nothing;
+
+  perform _log('arsenal', null::membros, 'Roubo do Arsenal ' || to_char(p_data, 'DD/MM') || ' ' || p_hora || 'h · Setor ' || sn || ': '
+               || qtd || ' presente' || case when qtd > 1 then 's' else '' end, '');
 end $$;
 
 -- ---------------------------------------------------------------------
@@ -971,6 +1073,8 @@ alter table public.historico   enable row level security;
 alter table public.tipos_evento enable row level security;
 alter table public.eventos      enable row level security;
 alter table public.presencas    enable row level security;
+alter table public.arsenal      enable row level security;
+alter table public.arsenal_presencas enable row level security;
 
 drop policy if exists leitura on public.perfis;
 create policy leitura on public.perfis      for select to authenticated using (user_id = auth.uid() or is_adm());
@@ -994,14 +1098,19 @@ drop policy if exists leitura on public.eventos;
 create policy leitura on public.eventos      for select to authenticated using (is_staff());
 drop policy if exists leitura on public.presencas;
 create policy leitura on public.presencas    for select to authenticated using (is_staff());
+drop policy if exists leitura on public.arsenal;
+create policy leitura on public.arsenal      for select to authenticated using (is_staff() and pode_ver_arsenal(setor_id));
+drop policy if exists leitura on public.arsenal_presencas;
+create policy leitura on public.arsenal_presencas for select to authenticated
+  using (is_staff() and exists (select 1 from public.arsenal a where a.id = arsenal_id and pode_ver_arsenal(a.setor_id)));
 
 revoke insert, update, delete, truncate on
   public.perfis, public.staff, public.cargo_perms, public.setores, public.membros, public.punicoes, public.ponto, public.historico,
-  public.tipos_evento, public.eventos, public.presencas
+  public.tipos_evento, public.eventos, public.presencas, public.arsenal, public.arsenal_presencas
   from anon, authenticated;
 revoke select on
   public.perfis, public.staff, public.cargo_perms, public.setores, public.membros, public.punicoes, public.ponto, public.historico,
-  public.tipos_evento, public.eventos, public.presencas
+  public.tipos_evento, public.eventos, public.presencas, public.arsenal, public.arsenal_presencas
   from anon;
 
 -- Funções: só usuários logados chamam; as internas (_) ninguém chama de fora
@@ -1025,7 +1134,7 @@ revoke execute on function public._pode_editar_evento(eventos)     from authenti
 do $$
 declare t text;
 begin
-  foreach t in array array['perfis','staff','cargo_perms','setores','membros','punicoes','ponto','historico','tipos_evento','eventos','presencas'] loop
+  foreach t in array array['perfis','staff','cargo_perms','setores','membros','punicoes','ponto','historico','tipos_evento','eventos','presencas','arsenal','arsenal_presencas'] loop
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
       execute format('alter publication supabase_realtime add table public.%I', t);
