@@ -223,3 +223,25 @@ table.resumo th,table.resumo td{padding:8px 6px}
 .setor-fixo{display:flex;align-items:center;font-weight:600;background:var(--surface-2)}
 .ars-cols{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:0 12px}
 .panel-h .toolbar{gap:6px}
+/* Situação no Roubo do Arsenal: um militar por linha */
+.ars-lista{display:flex;flex-direction:column;border-top:1px solid var(--line)}
+.ars-li{display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:1px solid var(--line)}
+.ars-li .nm{font-weight:500}
+.ars-li .st-sel{margin-left:auto;min-width:150px;font-weight:600}
+.st-sel.st-ativo{border-color:var(--ok);color:var(--ok);background:var(--ok-soft)}
+.st-sel.st-justificado{border-color:var(--warn);color:var(--warn);background:var(--warn-soft)}
+.st-sel.st-inativo{border-color:var(--bad);color:var(--bad);background:var(--bad-soft)}
+.st-sel option{color:var(--ink);background:var(--surface)}
+.st-sel:disabled{opacity:.75}
+.ars-cont{display:flex;gap:6px;flex-wrap:wrap}
+.cel small.just{display:block;font-size:10px;color:var(--warn);font-weight:600;line-height:1}
+@media (max-width:520px){.ars-li{flex-wrap:wrap}.ars-li .st-sel{margin-left:0;width:100%}}
+/* Filtro do resumo do Roubo do Arsenal */
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button{appearance:none;border:0;background:var(--surface);color:var(--muted);padding:4px 10px;min-height:30px;font-size:13px;font-weight:600;cursor:pointer}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button.on{background:var(--accent);color:var(--accent-ink)}
+.n-a,.n-j,.n-i{display:inline-block;min-width:16px;font-weight:600;font-variant-numeric:tabular-nums}
+.n-a{color:var(--ok)} .n-j{color:var(--warn)} .n-i{color:var(--bad)}
+.n-a+.n-j,.n-j+.n-i{margin-left:6px}
+.res-justificados .cel.tem{background:var(--warn-soft)}

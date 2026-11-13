@@ -35,7 +35,7 @@ let sb = null;
 const S = {
   fase:"carregando", err:null, session:null, uid:null, nomeJogo:"", authModo:"entrar",
   me:null, meuCargo:null, podeRegistrar:false, membros:[], setores:[], punicoes:[], eventos:[], tipos:[], presTot:{}, arsenal:[], hist:[], staff:[], perms:{}, perfis:[],
-  resData:"", arsData:"", arsHora:null, arsSetor:"", arsSel:new Set(), arsChave:"", arsSujo:false,
+  resData:"", resFiltro:"todos", arsData:"", arsHora:null, arsSetor:"", arsSel:new Map(), arsChave:"", arsSujo:false,
   selEv:null, fTipo:"", fDe:"", fAte:"", qEv:"", fotoUrl:{},
   tab:"geral", sel:null, q:"", fPat:"", fStatus:"ativo", fSetor:"", fHist:"", permDraft:null, busy:false, entrando:false
 };
@@ -83,7 +83,9 @@ const mapPt = r => ({id:r.id,membroId:r.membro_id,membroNome:r.membro_nome,inici
 const mapEv = r => ({id:r.id,tipoId:r.tipo_id,tipo:r.tipo_nome,treino:r.treinamento,titulo:r.titulo,data:ms(r.data_hora),instrutorId:r.instrutor_id,instrutor:r.instrutor_nome,descricao:r.descricao,fotos:r.fotos||[],criadoPor:r.criado_por,porLabel:r.criado_por_label,
   presentes:(r.presencas||[]).map(p => ({id:p.membro_id, nome:p.membro_nome}))});
 const mapArs = r => ({id:r.id,data:r.data,hora:r.hora,setorId:r.setor_id,ts:new Date(r.data + "T" + String(r.hora).padStart(2,"0") + ":00:00").getTime(),porLabel:r.atualizado_label,em:ms(r.atualizado_em),
-  presentes:(r.arsenal_presencas||[]).map(p => ({id:p.membro_id, nome:p.membro_nome}))});
+  presentes:(r.arsenal_presencas||[]).filter(p => (p.status || "ativo") === "ativo").map(p => ({id:p.membro_id, nome:p.membro_nome})),
+  justificados:(r.arsenal_presencas||[]).filter(p => p.status === "justificado").map(p => ({id:p.membro_id, nome:p.membro_nome})),
+  inativos:(r.arsenal_presencas||[]).filter(p => p.status === "inativo").map(p => ({id:p.membro_id, nome:p.membro_nome}))});
 const mapH = r => ({id:r.id,tipo:r.tipo,membroId:r.membro_id,membroNome:r.membro_nome,texto:r.texto,motivo:r.motivo,porLabel:r.por_label,em:ms(r.em)});
 
 /* ===== Carregamento ===== */
@@ -92,8 +94,8 @@ const LOADERS = {
   membros:     async () => { S.membros  = (await q(sb.from("membros").select("*").limit(2000))).map(mapM); },
   punicoes:    async () => { S.punicoes = (await q(sb.from("punicoes").select("*").order("em",{ascending:false}).limit(2000))).map(mapP); },
   eventos:     async () => { S.eventos  = (await q(sb.from("eventos").select("*, presencas(membro_id, membro_nome)").order("data_hora",{ascending:false}).limit(500))).map(mapEv); },
-  presencas:   async () => { const rows = await q(sb.rpc("presencas_por_membro")); S.presTot = Object.fromEntries(rows.map(r => [r.membro_id, {total:Number(r.total), eventos:Number(r.eventos), arsenal:Number(r.arsenal)}])); },
-  arsenal:     async () => { S.arsenal  = (await q(sb.from("arsenal").select("*, arsenal_presencas(membro_id, membro_nome)").order("data",{ascending:false}).limit(1000))).map(mapArs); },
+  presencas:   async () => { const rows = await q(sb.rpc("presencas_por_membro")); S.presTot = Object.fromEntries(rows.map(r => [r.membro_id, {total:Number(r.total), eventos:Number(r.eventos), arsenal:Number(r.arsenal), justificados:Number(r.justificados || 0)}])); },
+  arsenal:     async () => { S.arsenal  = (await q(sb.from("arsenal").select("*, arsenal_presencas(membro_id, membro_nome, status)").order("data",{ascending:false}).limit(1000))).map(mapArs); },
   tipos_evento: async () => { S.tipos   = await q(sb.from("tipos_evento").select("*").order("ordem").order("nome")); },
   historico:   async () => { S.hist     = (await q(sb.from("historico").select("*").order("em",{ascending:false}).limit(500))).map(mapH); },
   setores:     async () => { S.setores  = await q(sb.from("setores").select("*").order("ordem").order("nome")); },
@@ -407,7 +409,11 @@ function garantirArsenal(){
   const chave = `${S.arsData}|${S.arsHora}|${S.arsSetor}`;
   if (chave !== S.arsChave || !S.arsSujo) {
     const l = listaArsenal(S.arsData, S.arsHora, S.arsSetor);
-    S.arsSel = new Set((l?.presentes || []).map(p => p.id)); S.arsChave = chave; S.arsSujo = false;
+    S.arsSel = new Map();
+    (l?.presentes || []).forEach(p => S.arsSel.set(p.id, "ativo"));
+    (l?.justificados || []).forEach(p => S.arsSel.set(p.id, "justificado"));
+    (l?.inativos || []).forEach(p => S.arsSel.set(p.id, "inativo"));
+    S.arsChave = chave; S.arsSujo = false;
   }
 }
 function trocarArsenal(campo, valor){
@@ -423,10 +429,12 @@ function vArsenal(){
   const marcaveis = setoresMarcaveis();
   const pode = marcaveis.includes(S.arsSetor);
   const lista = listaArsenal(S.arsData, S.arsHora, S.arsSetor);
-  const ids = new Set(lista?.presentes.map(p => p.id) || []);
+  const ids = new Set([...(lista?.presentes || []), ...(lista?.justificados || []), ...(lista?.inativos || [])].map(p => p.id));
   const cand = S.membros.filter(m => (m.status === "ativo" && m.setorId === S.arsSetor) || ids.has(m.id))
     .sort((a,b) => b.patente - a.patente || String(a.nome).localeCompare(String(b.nome), "pt-BR"));
   const nHora = h => listaArsenal(S.arsData, h, S.arsSetor)?.presentes.length || 0;
+  const st = id => S.arsSel.get(id) || "inativo";
+  const cont = { ativo: 0, justificado: 0, inativo: 0 }; cand.forEach(m => cont[st(m.id)]++);
   const dataTxt = new Date(S.arsData + "T12:00:00").toLocaleDateString("pt-BR", {weekday:"long", day:"2-digit", month:"2-digit", year:"numeric"});
   const setorCampo = vis.length > 1
     ? `<select class="input" id="arsSetor">${S.setores.filter(x => vis.includes(x.id)).map(x => `<option value="${x.id}" ${x.id === S.arsSetor ? "selected" : ""}>${esc(x.nome)}${marcaveis.includes(x.id) ? "" : " (só ver)"}</option>`).join("")}</select>`
@@ -437,48 +445,78 @@ function vArsenal(){
       <div class="field"><label for="arsData">Dia</label><div class="toolbar"><input class="input" type="date" id="arsData" value="${esc(S.arsData)}" max="${hojeISO()}">
         <button class="btn sm" data-a="arsDia" data-id="0">Hoje</button><button class="btn sm" data-a="arsDia" data-id="1">Ontem</button></div>
         <span class="hint" style="text-transform:capitalize">${esc(dataTxt)}</span></div>
-      <div class="field"><label>Horário</label><div class="horas">${HORAS_ARSENAL.map(h => `<button class="hora ${h === S.arsHora ? "on" : ""}" data-a="arsHora" data-id="${h}" aria-pressed="${h === S.arsHora}"><b>${h}h</b><span>${nHora(h)} presente${nHora(h) === 1 ? "" : "s"}</span></button>`).join("")}</div></div>
+      <div class="field"><label>Horário</label><div class="horas">${HORAS_ARSENAL.map(h => `<button class="hora ${h === S.arsHora ? "on" : ""}" data-a="arsHora" data-id="${h}" aria-pressed="${h === S.arsHora}"><b>${h}h</b><span>${nHora(h)} ativo${nHora(h) === 1 ? "" : "s"}</span></button>`).join("")}</div></div>
       <div class="field"><label for="arsSetor">Setor</label>${setorCampo}</div>
     </div>
   </section>
-  <section class="panel"><div class="panel-h"><h2>Setor ${esc(setorNome(S.arsSetor))} · ${S.arsHora}h</h2><span class="muted num" id="ars-cont">${S.arsSel.size} de ${cand.length} marcados</span>
-      ${pode ? `<span class="sp" style="display:flex;gap:6px"><button class="btn sm" data-a="arsTodos">Marcar todos</button><button class="btn sm" data-a="arsNenhum">Desmarcar</button></span>` : ""}</div>
+  <section class="panel"><div class="panel-h"><h2>Setor ${esc(setorNome(S.arsSetor))} · ${S.arsHora}h</h2><span class="ars-cont" id="ars-cont">${contHTML(cont)}</span>
+      ${pode ? `<span class="sp" style="display:flex;gap:6px"><button class="btn sm" data-a="arsTodos">Todos ativos</button><button class="btn sm" data-a="arsNenhum">Todos inativos</button></span>` : ""}</div>
     ${!pode ? `<div class="panel-b"><div class="note">Só generais e quem tem função no setor (1 CMD, 2 CMD, 1 AUX, 2 AUX) marcam a lista. Aqui é só visualização.</div></div>` : ""}
-    ${cand.length ? `<div class="checklist ars-lista ars-cols">${cand.map(m => `<label class="ck"><input type="checkbox" data-a="arsMarca" value="${m.id}" ${S.arsSel.has(m.id) ? "checked" : ""} ${pode ? "" : "disabled"}> ${chip(m.patente)} <span>${esc(m.nome)}</span>${m.funcao ? fnChip(m.funcao) : ""}${m.status !== "ativo" || m.setorId !== S.arsSetor ? `<span class="muted" style="font-size:12px;margin-left:auto">fora do setor</span>` : ""}</label>`).join("")}</div>`
+    ${cand.length ? `<div class="ars-lista">${cand.map(m => `<div class="ars-li">${chip(m.patente)}<span class="nm">${esc(m.nome)}</span>${m.funcao ? fnChip(m.funcao) : ""}${m.status !== "ativo" || m.setorId !== S.arsSetor ? `<span class="muted" style="font-size:12px">fora do setor</span>` : ""}
+        <select class="input st-sel st-${st(m.id)}" data-a="arsStatus" data-id="${m.id}" ${pode ? "" : "disabled"} aria-label="Situação de ${esc(m.nome)}">
+          <option value="ativo" ${st(m.id) === "ativo" ? "selected" : ""}>Ativo</option><option value="justificado" ${st(m.id) === "justificado" ? "selected" : ""}>Justificado</option><option value="inativo" ${st(m.id) === "inativo" ? "selected" : ""}>Inativo</option></select></div>`).join("")}</div>`
       : `<div class="empty">Nenhum militar ativo no Setor ${esc(setorNome(S.arsSetor))}.</div>`}
     <div class="panel-b toolbar">
-      ${pode ? `<button class="btn pri" data-a="arsSalvar" ${S.arsSujo ? "" : "disabled"}>${S.arsSujo ? "Salvar lista" : "Lista salva"}</button>` : ""}
+      ${pode ? `<button class="btn pri" data-a="arsSalvar" ${S.arsSujo || !lista ? "" : "disabled"}>${S.arsSujo || !lista ? "Salvar lista" : "Lista salva"}</button>` : ""}
       <span class="muted" style="font-size:13px">${lista ? `Última alteração: ${esc(lista.porLabel || "—")} · ${fmtTs(lista.em)}` : "Nenhuma lista salva neste horário ainda."}</span>
     </div>
   </section>`;
 }
 // Painel da Visão geral (só Tenente General para cima)
+// Filtro do resumo: "todos" mostra ativos / justificados / inativos; ou só ativos; ou só justificados
+const RES_FILTROS = [["todos","Todos"],["ativos","Ativos"],["justificados","Justificados"]];
+function celResumo(c){
+  const f = S.resFiltro || "todos";
+  if (f === "ativos") return `${c.a}`;
+  if (f === "justificados") return `${c.j}`;
+  return `<span class="n-a" title="Ativos">${c.a}</span><span class="n-j" title="Justificados">${c.j}</span><span class="n-i" title="Inativos">${c.i}</span>`;
+}
+const contaLista = l => ({ a: l?.presentes.length || 0, j: l?.justificados.length || 0, i: l?.inativos.length || 0 });
+const somaC = cs => cs.reduce((t, c) => ({ a: t.a + c.a, j: t.j + c.j, i: t.i + c.i }), { a: 0, j: 0, i: 0 });
+// Painel da Visão geral (só Tenente General para cima)
 function painelResumoArsenal(){
   if (!podeResumo() || !S.setores.length) return "";
   if (!S.resData) S.resData = hojeISO();
+  if (!S.resFiltro) S.resFiltro = "todos";
   const d = S.resData;
   const doDia = S.arsenal.filter(a => a.data === d);
-  const porHora = h => doDia.filter(a => a.hora === h).reduce((n, a) => n + a.presentes.length, 0);
+  const porHora = h => somaC(doDia.filter(a => a.hora === h).map(contaLista));
+  const legenda = S.resFiltro === "todos" ? `<span class="n-a">ativos</span> <span class="n-j">justificados</span> <span class="n-i">inativos</span>` : S.resFiltro === "ativos" ? "Números = ativos." : "Números = justificados.";
   return `<section class="panel"><div class="panel-h"><h2>Roubo do Arsenal · resumo do dia</h2>
       <span class="sp toolbar"><input class="input" type="date" id="resData" value="${esc(d)}" max="${hojeISO()}" aria-label="Dia do resumo">
       <button class="btn sm" data-a="resDia" data-id="0">Hoje</button><button class="btn sm" data-a="resDia" data-id="1">Ontem</button>
+      <span class="seg" role="group" aria-label="Mostrar">${RES_FILTROS.map(([k, n]) => `<button class="${S.resFiltro === k ? "on" : ""}" data-a="resFiltro" data-id="${k}" aria-pressed="${S.resFiltro === k}">${n}</button>`).join("")}</span>
       <button class="btn sm" data-a="arsCopiar" ${doDia.length ? "" : "disabled"}>Copiar resumo</button></span></div>
-    <div class="tablewrap"><table class="resumo"><thead><tr><th>Setor</th>${HORAS_ARSENAL.map(h => `<th>${h}h</th>`).join("")}<th>Total</th></tr></thead><tbody>
-    ${S.setores.map(st => { const linha = HORAS_ARSENAL.map(h => listaArsenal(d, h, st.id)); const tot = linha.reduce((n, l) => n + (l?.presentes.length || 0), 0);
-      return `<tr><td>${esc(st.nome)}</td>${linha.map((l, i) => `<td><button class="cel ${l ? "tem" : ""}" data-a="abrirArs" data-id="${d}|${HORAS_ARSENAL[i]}|${st.id}" title="Abrir a lista">${l ? l.presentes.length : "—"}</button></td>`).join("")}<td class="num"><b>${tot}</b></td></tr>`; }).join("")}
-    <tr class="tot"><td>Total</td>${HORAS_ARSENAL.map(h => `<td class="num">${porHora(h)}</td>`).join("")}<td class="num">${doDia.reduce((n, a) => n + a.presentes.length, 0)}</td></tr>
-    </tbody></table></div></section>`;
+    <div class="tablewrap"><table class="resumo res-${S.resFiltro}"><thead><tr><th>Setor</th>${HORAS_ARSENAL.map(h => `<th>${h}h</th>`).join("")}<th>Total</th></tr></thead><tbody>
+    ${S.setores.map(st => { const linha = HORAS_ARSENAL.map(h => listaArsenal(d, h, st.id)); const tot = somaC(linha.map(contaLista));
+      return `<tr><td>${esc(st.nome)}</td>${linha.map((l, i) => `<td><button class="cel ${l ? "tem" : ""}" data-a="abrirArs" data-id="${d}|${HORAS_ARSENAL[i]}|${st.id}" title="${l ? `${l.presentes.length} ativos, ${l.justificados.length} justificados, ${l.inativos.length} inativos` : "Abrir a lista"}">${l ? celResumo(contaLista(l)) : "—"}</button></td>`).join("")}<td class="num"><b>${celResumo(tot)}</b></td></tr>`; }).join("")}
+    <tr class="tot"><td>Total</td>${HORAS_ARSENAL.map(h => `<td class="num">${celResumo(porHora(h))}</td>`).join("")}<td class="num">${celResumo(somaC(doDia.map(contaLista)))}</td></tr>
+    </tbody></table></div><div class="panel-b muted" style="font-size:12px">${legenda}</div></section>`;
 }
 
+function contHTML(c){ return `<span class="pill ok">${c.ativo} ativo${c.ativo === 1 ? "" : "s"}</span> <span class="pill warn">${c.justificado} justificado${c.justificado === 1 ? "" : "s"}</span> <span class="pill bad">${c.inativo} inativo${c.inativo === 1 ? "" : "s"}</span>`; }
 function textoResumoArsenal(){
-  const d = S.resData || hojeISO();
-  const L = [`**Roubo do Arsenal · ${new Date(d + "T12:00:00").toLocaleDateString("pt-BR")}**`];
+  const d = S.resData || hojeISO(), f = S.resFiltro || "todos";
+  const pl = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  const L = [`**Roubo do Arsenal · ${new Date(d + "T12:00:00").toLocaleDateString("pt-BR")}**${f === "ativos" ? " · só ativos" : f === "justificados" ? " · só justificados" : ""}`];
+  const nome = p => mById(p.id) ? mLabel(mById(p.id)) : p.nome;
   for (const h of HORAS_ARSENAL) {
     const ls = S.arsenal.filter(a => a.data === d && a.hora === h);
     if (!ls.length) continue;
-    const tot = ls.reduce((n, a) => n + a.presentes.length, 0);
-    L.push(""); L.push(`**${h}h** · ${tot} presente${tot === 1 ? "" : "s"}`);
-    for (const a of ls) L.push(`Setor ${setorNome(a.setorId) || "?"} (${a.presentes.length}): ` + a.presentes.map(p => mById(p.id) ? mLabel(mById(p.id)) : p.nome).join(", "));
+    const c = somaC(ls.map(contaLista));
+    if ((f === "justificados" && !c.j) || (f === "ativos" && !c.a)) continue;
+    L.push(""); L.push(`**${h}h** · ` + (f === "ativos" ? pl(c.a, "ativo") : f === "justificados" ? pl(c.j, "justificado") : `${pl(c.a, "ativo")}, ${pl(c.j, "justificado")}, ${pl(c.i, "inativo")}`));
+    for (const a of ls) {
+      const sn = `Setor ${setorNome(a.setorId) || "?"}`;
+      if (f === "ativos") L.push(`${sn} · ${pl(a.presentes.length, "ativo")}: ` + (a.presentes.map(nome).join(", ") || "—"));
+      else if (f === "justificados") { if (a.justificados.length) L.push(`${sn} · ${pl(a.justificados.length, "justificado")}: ` + a.justificados.map(nome).join(", ")); }
+      else {
+        L.push(`${sn}`);
+        L.push(`  Ativos (${a.presentes.length}): ` + (a.presentes.map(nome).join(", ") || "—"));
+        if (a.justificados.length) L.push(`  Justificados (${a.justificados.length}): ` + a.justificados.map(nome).join(", "));
+        if (a.inativos.length) L.push(`  Inativos (${a.inativos.length}): ` + a.inativos.map(nome).join(", "));
+      }
+    }
   }
   return L.join("\n");
 }
@@ -658,7 +696,7 @@ function renderDrawer(){
     <div class="dr-b">
       <dl class="facts"><div><dt>Discord</dt><dd>${esc(m.discord || "—")}</dd></div>
         <div><dt>Setor</dt><dd>${m.setorId && setorById(m.setorId) ? `${esc(setorNome(m.setorId))}${m.funcao ? ` · ${esc(fnNome(m.funcao))}` : ""}` : "Sem setor"}</dd></div>
-        <div><dt>Ingresso</dt><dd class="num">${fmtDate(m.ingresso)}</dd></div><div><dt>Presenças</dt><dd class="num">${S.presTot[m.id]?.total || 0} no total · ${pres30(m.id)} em 30 dias<div class="muted" style="font-size:12px;font-weight:400">${S.presTot[m.id]?.arsenal || 0} no Roubo do Arsenal · ${S.presTot[m.id]?.eventos || 0} em eventos</div></dd></div>
+        <div><dt>Ingresso</dt><dd class="num">${fmtDate(m.ingresso)}</dd></div><div><dt>Presenças</dt><dd class="num">${S.presTot[m.id]?.total || 0} no total · ${pres30(m.id)} em 30 dias<div class="muted" style="font-size:12px;font-weight:400">${S.presTot[m.id]?.arsenal || 0} no Roubo do Arsenal${S.presTot[m.id]?.justificados ? ` (+${S.presTot[m.id].justificados} justificada${S.presTot[m.id].justificados > 1 ? "s" : ""})` : ""} · ${S.presTot[m.id]?.eventos || 0} em eventos</div></dd></div>
         ${(() => { const c = contaDe(m.id); return c ? `<div><dt>Conta no painel</dt><dd>${esc(nivelLabel(cargoDaFicha(m)) )}</dd></div>` : ""; })()}
         ${m.obs ? `<div style="grid-column:1/-1"><dt>Observações</dt><dd style="font-weight:400;white-space:pre-wrap">${esc(m.obs)}</dd></div>` : ""}</dl>
       ${b.length ? `<div class="actions">${b.join("")}</div>` : ""}
@@ -951,8 +989,7 @@ document.addEventListener("click", e => {
   if (a === "mscrim" && e.target !== t) return;
   if (t.tagName === "A" || a === "abrir") e.preventDefault();
   if (t.tagName === "SELECT" || t.type === "radio") return;
-  if (t.type === "checkbox" && a !== "arsMarca") return;
-  if (a === "arsMarca") return; // tratado no "change"
+  if (t.type === "checkbox") return;
   const m = id ? mById(id) : null;
   switch (a) {
     case "modoCriar": S.authModo = "criar"; render(); break;
@@ -978,11 +1015,16 @@ document.addEventListener("click", e => {
     case "abrirArs": { const [d, h, st] = id.split("|"); S.sel = null; S.selEv = null; S.tab = "arsenal"; S.arsSujo = false; S.arsData = d; S.arsHora = Number(h); S.arsSetor = st; render(); window.scrollTo(0, 0); break; }
     case "arsHora": trocarArsenal("arsHora", Number(id)); break;
     case "arsDia": { const d = new Date(); d.setDate(d.getDate() - Number(id)); trocarArsenal("arsData", `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`); break; }
+    case "resFiltro": S.resFiltro = id; render(); break;
     case "resDia": { const d = new Date(); d.setDate(d.getDate() - Number(id)); S.resData = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; render(); break; }
     case "arsCel": { const [h, st] = id.split("|"); const ir = () => { S.arsSujo = false; S.arsHora = Number(h); S.arsSetor = st; render(); };
       if (S.arsSujo && (Number(h) !== S.arsHora || st !== S.arsSetor)) mConfirm("Descartar alterações?", "A lista atual tem marcações que não foram salvas. Trocar agora descarta essas marcações.", "Descartar e trocar", () => { ir(); return true; }); else ir(); break; }
-    case "arsTodos": case "arsNenhum": document.querySelectorAll(".ars-lista input[data-a='arsMarca']").forEach(i => { if (!i.disabled) { i.checked = a === "arsTodos"; i.checked ? S.arsSel.add(i.value) : S.arsSel.delete(i.value); } }); S.arsSujo = true; render(); break;
-    case "arsSalvar": (async () => { const ok = await rpc("salvar_arsenal", { p_data:S.arsData, p_hora:S.arsHora, p_setor:S.arsSetor, p_presentes:[...S.arsSel] }, S.arsSel.size ? "Lista salva." : "Lista apagada."); if (ok) { S.arsSujo = false; render(); } })(); break;
+    case "arsTodos": case "arsNenhum": document.querySelectorAll(".ars-lista select[data-a='arsStatus']").forEach(i => { if (!i.disabled) S.arsSel.set(i.dataset.id, a === "arsTodos" ? "ativo" : "inativo"); }); S.arsSujo = true; render(); break;
+    case "arsSalvar": (async () => {
+      const g = { ativo: [], justificado: [], inativo: [] };
+      document.querySelectorAll(".ars-lista select[data-a='arsStatus']").forEach(i => g[S.arsSel.get(i.dataset.id) || "inativo"].push(i.dataset.id));
+      const ok = await rpc("salvar_arsenal", { p_data:S.arsData, p_hora:S.arsHora, p_setor:S.arsSetor, p_ativos:g.ativo, p_justificados:g.justificado, p_inativos:g.inativo }, "Lista salva.");
+      if (ok) { S.arsSujo = false; render(); } })(); break;
     case "arsCopiar": if (!podeResumo()) break; navigator.clipboard.writeText(textoResumoArsenal()).then(() => toast("Resumo copiado. Cole no Discord ou onde quiser."), () => toast("Não foi possível copiar automaticamente.", "err")); break;
     case "novoEv": if (S.podeRegistrar) mEvento(null); break;
     case "editarEv": { const ev = S.eventos.find(x => x.id === id); ev && mEvento(ev); break; }
@@ -1050,8 +1092,10 @@ document.addEventListener("change", e => {
   else if (t.id === "resData") { if (t.value) { S.resData = t.value > today() ? today() : t.value; render(); } }
   else if (t.id === "arsData") { if (t.value) trocarArsenal("arsData", t.value > today() ? today() : t.value); }
   else if (t.id === "arsSetor") { const v = t.value; t.value = S.arsSetor; trocarArsenal("arsSetor", v); }
-  else if (t.dataset.a === "arsMarca") { t.checked ? S.arsSel.add(t.value) : S.arsSel.delete(t.value); S.arsSujo = true;
-    const c = $("#ars-cont"); if (c) c.textContent = `${S.arsSel.size} de ${document.querySelectorAll(".ars-lista input").length} marcados`;
+  else if (t.dataset.a === "arsStatus") { S.arsSel.set(t.dataset.id, t.value); S.arsSujo = true;
+    t.className = `input st-sel st-${t.value}`;
+    const c = { ativo: 0, justificado: 0, inativo: 0 }; document.querySelectorAll(".ars-lista select[data-a='arsStatus']").forEach(i => c[S.arsSel.get(i.dataset.id) || "inativo"]++);
+    const el = $("#ars-cont"); if (el) el.innerHTML = contHTML(c);
     const b = document.querySelector("[data-a='arsSalvar']"); if (b) { b.disabled = false; b.textContent = "Salvar lista"; } }
   else if (t.id === "fDe") { S.fDe = t.value; render(); }
   else if (t.id === "fAte") { S.fAte = t.value; render(); }

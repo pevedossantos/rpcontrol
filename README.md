@@ -100,7 +100,9 @@ Cada conta é ligada a uma ficha do efetivo, e **a patente da ficha define o ace
 
 ## Lista de presença · Roubo do Arsenal
 
-- Aba **Lista de presença**: escolha o dia, o horário (11h, 13h, 15h, 17h ou 19h) e o setor, marque quem participou e clique em **Salvar lista**.
+- Aba **Lista de presença**: escolha o dia, o horário (11h, 13h, 15h, 17h ou 19h) e o setor. Cada militar do setor aparece numa linha
+  com a situação **Ativo**, **Justificado** ou **Inativo** (padrão). Ajuste e clique em **Salvar lista**.
+- Só **Ativo** conta como presença na ficha; **Justificado** aparece contado à parte.
 - Cada setor tem a sua lista em cada horário.
 - Quem marca: ADM Geral e generais (Major General ou acima) em qualquer setor;
   **1 CMD, 2 CMD, 1 AUX e 2 AUX** só no próprio setor.

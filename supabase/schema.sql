@@ -226,6 +226,9 @@ create table if not exists public.arsenal_presencas (
   primary key (arsenal_id, membro_id)
 );
 create index if not exists arsenal_presencas_membro_idx on public.arsenal_presencas (membro_id);
+-- Situação de cada militar no horário: ativo (participou), justificado ou inativo
+alter table public.arsenal_presencas add column if not exists status text not null default 'ativo'
+  check (status in ('ativo','justificado','inativo'));
 
 -- O Roubo do Arsenal saiu da aba Eventos (tem lista própria). O tipo só é apagado se nenhum evento usar.
 delete from public.tipos_evento t
@@ -818,15 +821,19 @@ begin
   return e.fotos;  -- o site apaga as fotos do armazenamento
 end $$;
 
--- Total de presenças por militar (todas as datas)
+-- Total de presenças por militar: eventos + Roubo do Arsenal (só "ativo" conta como presença)
 drop function if exists public.presencas_por_membro();
 create or replace function public.presencas_por_membro()
-returns table (membro_id uuid, total bigint, eventos bigint, arsenal bigint)
+returns table (membro_id uuid, total bigint, eventos bigint, arsenal bigint, justificados bigint)
 language sql stable security definer set search_path = public as $$
-  select x.membro_id, count(*), count(*) filter (where x.origem = 'e'), count(*) filter (where x.origem = 'a')
+  select x.membro_id,
+         count(*) filter (where x.origem in ('e','a')),
+         count(*) filter (where x.origem = 'e'),
+         count(*) filter (where x.origem = 'a'),
+         count(*) filter (where x.origem = 'j')
   from (select p.membro_id, 'e' as origem from presencas p
         union all
-        select ap.membro_id, 'a' from arsenal_presencas ap) x
+        select ap.membro_id, case ap.status when 'ativo' then 'a' when 'justificado' then 'j' else 'i' end from arsenal_presencas ap) x
   where is_staff()
   group by x.membro_id
 $$;
@@ -890,34 +897,33 @@ language sql stable security definer set search_path = public as $$
   select is_adm() or meu_cargo() in ('tengen','celgen','genadj','federal')
 $$;
 
--- Salva a lista completa de presentes de um setor num dia/horário. Lista vazia apaga a lista.
-create or replace function public.salvar_arsenal(p_data date, p_hora int, p_setor uuid, p_presentes uuid[])
+-- Salva a situação de cada militar do setor num dia/horário: ativo, justificado ou inativo.
+drop function if exists public.salvar_arsenal(date, int, uuid, uuid[]);
+create or replace function public.salvar_arsenal(p_data date, p_hora int, p_setor uuid,
+                                                 p_ativos uuid[], p_justificados uuid[], p_inativos uuid[])
 returns void language plpgsql security definer set search_path = public as $$
-declare a arsenal; sn text; qtd int := coalesce(array_length(p_presentes, 1), 0); fora int;
+declare a arsenal; sn text; todos uuid[]; na int; nj int; ni int; fora int;
 begin
+  p_ativos := coalesce(p_ativos, '{}'); p_justificados := coalesce(p_justificados, '{}'); p_inativos := coalesce(p_inativos, '{}');
+  na := coalesce(array_length(p_ativos, 1), 0); nj := coalesce(array_length(p_justificados, 1), 0); ni := coalesce(array_length(p_inativos, 1), 0);
+  todos := p_ativos || p_justificados || p_inativos;
   if p_data is null then raise exception 'Escolha o dia.'; end if;
   if p_hora is null or p_hora not in (11, 13, 15, 17, 19) then raise exception 'Escolha um horário válido (11h, 13h, 15h, 17h ou 19h).'; end if;
   if p_data > (now() at time zone 'America/Sao_Paulo')::date then raise exception 'Não dá para marcar presença em um dia que ainda não chegou.'; end if;
   select nome into sn from setores where id = p_setor;
   if not found then raise exception 'Escolha o setor.'; end if;
   if not pode_marcar_arsenal(p_setor) then raise exception 'Você só pode marcar a lista do seu próprio setor.'; end if;
-  if qtd > 200 then raise exception 'Máximo de 200 presentes por lista.'; end if;
+  if na + nj + ni = 0 then raise exception 'Não há militares na lista.'; end if;
+  if na + nj + ni > 300 then raise exception 'Máximo de 300 militares por lista.'; end if;
+  if (select count(distinct x) from unnest(todos) x) <> na + nj + ni then raise exception 'Um militar aparece com mais de uma situação.'; end if;
 
   select * into a from arsenal where data = p_data and hora = p_hora and setor_id = p_setor for update;
 
-  select count(*) into fora from unnest(coalesce(p_presentes, '{}')) x(id)
+  select count(*) into fora from unnest(todos) x(id)
    where not exists (select 1 from membros m where m.id = x.id and
            ((m.status = 'ativo' and m.setor_id = p_setor)
             or (a.id is not null and exists (select 1 from arsenal_presencas ap where ap.arsenal_id = a.id and ap.membro_id = m.id))));
   if fora > 0 then raise exception 'Só é possível marcar militares ativos do Setor %.', sn; end if;
-
-  if qtd = 0 then
-    if a.id is not null then
-      delete from arsenal where id = a.id;
-      perform _log('arsenal', null::membros, 'Roubo do Arsenal ' || to_char(p_data, 'DD/MM') || ' ' || p_hora || 'h · Setor ' || sn || ': lista apagada', '');
-    end if;
-    return;
-  end if;
 
   if a.id is null then
     insert into arsenal (data, hora, setor_id, atualizado_por, atualizado_label)
@@ -926,13 +932,17 @@ begin
     update arsenal set atualizado_por = auth.uid(), atualizado_label = meu_rotulo(), atualizado_em = now() where id = a.id;
   end if;
 
-  delete from arsenal_presencas where arsenal_id = a.id and membro_id <> all (p_presentes);
-  insert into arsenal_presencas (arsenal_id, membro_id, membro_nome)
-  select a.id, m.id, patente_sigla(m.patente) || ' ' || m.nome from membros m where m.id = any (p_presentes)
-  on conflict (arsenal_id, membro_id) do nothing;
+  delete from arsenal_presencas where arsenal_id = a.id and membro_id <> all (todos);
+  insert into arsenal_presencas (arsenal_id, membro_id, membro_nome, status)
+  select a.id, m.id, patente_sigla(m.patente) || ' ' || m.nome,
+         case when m.id = any (p_ativos) then 'ativo' when m.id = any (p_justificados) then 'justificado' else 'inativo' end
+  from membros m where m.id = any (todos)
+  on conflict (arsenal_id, membro_id) do update set status = excluded.status;
 
   perform _log('arsenal', null::membros, 'Roubo do Arsenal ' || to_char(p_data, 'DD/MM') || ' ' || p_hora || 'h · Setor ' || sn || ': '
-               || qtd || ' presente' || case when qtd > 1 then 's' else '' end, '');
+               || na || ' ativo' || case when na <> 1 then 's' else '' end || ', '
+               || nj || ' justificado' || case when nj <> 1 then 's' else '' end || ', '
+               || ni || ' inativo' || case when ni <> 1 then 's' else '' end, '');
 end $$;
 
 -- ---------------------------------------------------------------------
